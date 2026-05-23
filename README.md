@@ -115,7 +115,7 @@ tipy provides a Python-like socket API for easy integration.
 
 - Packet integrity validation is not yet implemented.
 - DHCP is not supported; static network configuration is required.
-- `shutdown()` currently only closes the TCP receive path (`SHUT_RD` behavior). `SHUT_WR` is not yet supported.
+- `shutdown()` currently only closes the TCP TX path (`SHUT_WR` behavior). `SHUT_RD` is not yet supported.
 
 ---
 
