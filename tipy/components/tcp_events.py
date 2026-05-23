@@ -1,0 +1,98 @@
+from __future__ import annotations
+
+from time import sleep
+from collections import deque
+from threading import Condition, Thread
+
+from tipy.lib.logger import log
+from tipy.protocols.tcp.tcp import TCPEventType, TCPEvent
+
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from tipy.components.core import Core
+
+
+
+MAX_EVENTS = 1000
+
+
+def _h_active_open_event(event: TCPEvent):
+    event.tcpcb.activ_open()
+
+
+def _h_rx_segment_event(event: TCPEvent, ):
+    event.tcpcb.rx(event.packet_rx)
+
+
+def _h_send_event(event: TCPEvent):
+    event.tcpcb.tx()
+
+
+def _h_timer_event(event: TCPEvent):
+    event.tcpcb.retransmit()
+
+
+class TCPEvents:
+    def __init__(self, core: Core | None = None):
+
+
+        self._events_queue: deque[TCPEvent] = deque()
+        self.core: Core = core
+        self._stop_thread: bool = False
+        self._cond: Condition = Condition()
+
+        self._events_map: dict = {
+            # event type : handler
+            TCPEventType.CONNECT     : _h_active_open_event,
+            TCPEventType.RX_SEGMENT  : _h_rx_segment_event,
+            TCPEventType.SEND        : _h_send_event,
+            TCPEventType.TIMER       : _h_timer_event
+        }
+
+
+
+    def start(self):
+        Thread(target=self._tcp_events_loop, daemon=True).start()
+
+    def shutdown(self):
+        self._stop_thread = True
+        with self._cond:
+            self._cond.notify_all()
+        __debug__ and log("stack",
+                          "TCP Events shutdown",
+                          level="INFO")
+
+
+
+    def schedule_event(self, event: TCPEvent):
+        with self._cond:
+            self._events_queue.append(event)
+            self._cond.notify()
+
+    def _tcp_events_loop(self):
+        __debug__ and log("stack",
+                          "TCP Events Started",
+                          level="INFO")
+        while not self._stop_thread:
+
+            with self._cond:
+                if not self._events_queue:
+                    self._cond.wait()
+                l = len(self._events_queue)
+
+            for x in range(min(MAX_EVENTS, l)):
+                ev = self._events_queue.popleft()
+                self._events_map[ev.type](ev)
+
+            sleep(0) # this may release the GIL. IDK...
+
+
+
+
+
+
+
+
+
+
+
