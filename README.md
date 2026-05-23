@@ -211,7 +211,7 @@ nmcli con add \
   mode tap \
   master br0
 
-nmcli con mod tap7 ethernet.cloned-mac-address 00:11:22:33:44:55
+nmcli con mod tap7 ethernet.mac-address 00:11:22:33:44:55
 ```
 - This creates a TAP device and assigns it a fixed MAC address.
 - Important: The MAC address assigned here must match the MAC configured in tipy's config.py.
