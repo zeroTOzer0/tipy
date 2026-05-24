@@ -11,6 +11,9 @@ if TYPE_CHECKING:
     from tipy.lib.packet import PacketRX
 
 class EtherParser:
+
+    __slots__ = ('_frame', '__dict__')
+
     def __init__(self, packet_rx: PacketRX):
         self._frame: memoryview = packet_rx.frame
         packet_rx.ether = self

@@ -7,6 +7,9 @@ from tipy.lib.mac_address import MACAddress
 from tipy.protocols.arp.arp import ARP_OP_REPLY, ARP_OP_REQUEST
 
 class ARPParser:
+
+    __slots__ = ('_frame', '__dict__')
+
     def __init__(self, packet_rx: PacketRX):
         self._frame: memoryview = packet_rx.frame
         packet_rx.arp = self

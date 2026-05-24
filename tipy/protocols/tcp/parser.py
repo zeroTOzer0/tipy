@@ -18,7 +18,9 @@ if TYPE_CHECKING:
 
 
 class TCPParser:
+
     __slots__ = ('_frame', '__dict__')
+
     def __init__(self, packet_rx: PacketRX):
 
         self._frame: memoryview = packet_rx.frame
