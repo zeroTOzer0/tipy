@@ -1,4 +1,4 @@
-from tipy import Wyr, socket
+from tipy import Tipy, socket
 
 
 IFNAME = "tap7"
@@ -6,7 +6,7 @@ LISTEN_IP = "192.168.2.200"
 LISTEN_PORT = 9999
 PEER_IP = "192.168.2.199"
 PEER_PORT = 9999
-stack = Wyr(ifname=IFNAME)
+stack = Tipy(ifname=IFNAME)
 
 try:
     stack.start()

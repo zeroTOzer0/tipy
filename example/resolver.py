@@ -1,4 +1,4 @@
-from tipy import Wyr, socket
+from tipy import Tipy, socket
 import struct, sys
 import socket as _sk
 
@@ -84,7 +84,7 @@ if len(args) == 1:
     print('usage : PYTHONPATH=. python3 ping.py <example.com>')
     sys.exit(0)
 
-stack = Wyr(ifname="tap7")
+stack = Tipy(ifname="tap7")
 
 try:
     stack.start()

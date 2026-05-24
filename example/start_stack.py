@@ -1,8 +1,8 @@
-from tipy import Wyr, socket
+from tipy import Tipy, socket
 
 IFNAME = "tap7"
 
-stack = Wyr(ifname=IFNAME)
+stack = Tipy(ifname=IFNAME)
 
 try:
     stack.start()

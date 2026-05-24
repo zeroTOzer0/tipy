@@ -36,7 +36,7 @@ def open_tap_interface(ifname: str) -> int:
 
 
 
-class Wyr:
+class Tipy:
 
     def __init__(self,*, ifname: str):
         self.__ifname = ifname
