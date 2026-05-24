@@ -139,7 +139,7 @@ class UDPSocket(Socket):
                 log(
                     "socket",
                     f"{self} {self.local_ip}:{self.local_port} -> {self.remote_ip}:{self.remote_port} "
-                    f"sent {len(data)} bytes",
+                    f"sent {len(data)}B",
                     level="INFO"
                 )
 
@@ -159,6 +159,15 @@ class UDPSocket(Socket):
                 raise TimeoutError('timed out')
 
             packet = self._queue.popleft()
+
+            if __debug__:
+                log(
+                    "socket",
+                    f"{self} {self.local_ip}:{self.local_port} -> {self.remote_ip}:{self.remote_port} "
+                    f"recv {len(packet)}B, read {len(packet[:bufsize])}B",
+                    level="INFO"
+                )
+
             return bytes(packet[:bufsize])
 
     def settimeout(self, t: int):

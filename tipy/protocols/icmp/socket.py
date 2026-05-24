@@ -59,8 +59,8 @@ class ICMPSocket(Socket):
 
         if __debug__: log(
             'socket',
-            f'<lg<U>>{self.local_ip}/{str(IP_PROTO_ICMP)}<U></>'
-            f' - Bound to socket'
+            f'{self} bound to {self.local_ip}/{str(IP_PROTO_ICMP)}',
+            level='INFO'
         )
 
     def listen(self, backlog: int):
@@ -73,15 +73,18 @@ class ICMPSocket(Socket):
         except IPFormatError:
             raise gaierror('[Errno -2] Name or service not known')
 
-        if __debug__: log("socket", f"<lg><U>{self}"
-                                    f"</> - Connected")
-
+        if __debug__: log(
+            "socket",
+            f"{self} connect to {self.remote_ip}:{self.remote_port}",
+            level="INFO"
+        )
     def send(self, data: bytes):
         # check if the socket is connected type (we use connect call)
         if self.remote_ip.ip_address != '0.0.0.0':
             if __debug__: log(
                 "socket",
-                f"<lg><U>{self}</> - Sent {len(data)} bytes of data</>",
+                f"{self} connect to {self.remote_ip}:{self.remote_port}",
+                level="INFO"
             )
 
             stack.core.tx_raw(
@@ -93,6 +96,14 @@ class ICMPSocket(Socket):
 
             )
 
+            if __debug__:
+                log(
+                    "socket",
+                    f"{self} {self.local_ip} -> {self.remote_ip} ({str(IP_PROTO_ICMP)}) "
+                    f"sent {len(data)}B",
+                    level="INFO"
+                )
+
     def recv(self, bufsize: int):
         with self._cond:
             got_packet = self._cond.wait(timeout=self._timeout)
@@ -100,6 +111,16 @@ class ICMPSocket(Socket):
                 raise TimeoutError('timed out')
 
             packet = self._queue.popleft()
+
+
+            if __debug__:
+                log(
+                    "socket",
+                    f"{self} {self.local_ip} -> {self.remote_ip} "
+                    f"recv {len(packet)}B, read {len(packet[:bufsize])}B",
+                    level="INFO"
+                )
+
             return bytes(packet[:bufsize])
 
 
@@ -111,7 +132,11 @@ class ICMPSocket(Socket):
         stack.core.raw_v4.remove_socket(
             self.sock_id
         )
-        if __debug__: log("socket", f"<lg><U>{self}</> - <r><U>Closed</>")
+        if __debug__:
+            log("socket",
+                f"{self} socket closed",
+                level="INFO"
+            )
 
     def settimeout(self, t: int):
         self._timeout = t
