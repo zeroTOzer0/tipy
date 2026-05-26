@@ -42,7 +42,7 @@ def parse_query(response):
 
     ip_addresses = []
     for _ in range(ancount):
-        if response[pos] & 0xC0 == 0xC0:  # ضغط DNS
+        if response[pos] & 0xC0 == 0xC0:
             pos += 2
         else:
             while response[pos] != 0:

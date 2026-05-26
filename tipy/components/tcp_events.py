@@ -46,7 +46,7 @@ class TCPEvents:
             TCPEventType.CONNECT     : _h_active_open_event,
             TCPEventType.RX_SEGMENT  : _h_rx_segment_event,
             TCPEventType.SEND        : _h_send_event,
-            TCPEventType.TIMER       : _h_timer_event
+            TCPEventType.RTX         : _h_timer_event
         }
 
 

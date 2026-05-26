@@ -224,12 +224,14 @@ class TCPCB:
 
         self._remote_mss: int = 0
 
-        # helper Flags
+        # helper
         self._ack_now: bool = False
+        self._del_ack: bool = False
 
         # tcp connection timers
         self._rtx_timer: TimerTask | None = None
         self._time_wait_timer: TimerTask | None = None
+        self._del_ack_timer: TimerTask | None = None
         self._persist_timer: TimerTask | None = None # FIXME: STATE NOT YET SUPPORTED
 
         # Application requested connection close/shutdown.
@@ -350,7 +352,17 @@ class TCPCB:
     def _stop_time_wait_timer(self):
         if self._time_wait_timer:
             self._time_wait_timer.remove()
-            self._rtx_timer = None
+            self._time_wait_timer = None
+
+    def _stop_del_ack_timer(self):
+        if self._del_ack_timer:
+            self._del_ack_timer.remove()
+            self._del_ack_timer = None
+
+    def _stop_all_timers(self):
+        self._stop_rtx_timer()
+        self._stop_del_ack_timer()
+        self._stop_time_wait_timer()
 
     def _rollback_to_una(self):
         """
@@ -377,12 +389,13 @@ class TCPCB:
                 remove_at_execute=True,
                 call=lambda: self.core.tcp_events_schedule.schedule_event(
                                 event=TCPEvent(
-                                type_=TCPEventType.TIMER,
+                                type_=TCPEventType.RTX,
                                 tcpcb=self
                                 )
                             ),
                 timer_name='tcp retransmission'
             )
+
 
     def _start_time_wait_timer(self):
         self._time_wait_timer = self.core.timer.schedule_timer(
@@ -610,6 +623,7 @@ class TCPCB:
         if decision == TCP_ACCEPT_AND_HANDLE:
 
             if self._h_rcv_rst(packet_rx=packet_rx):
+                self._tcpcb_lock.release()
                 return
 
             # check if all our seq qre acked to stop timer
@@ -711,7 +725,6 @@ class TCPCB:
                     return
 
             if self._ack_now:
-                # Pure ACK
                 self._send_ack(rcv_wnd=rcv_wnd)
                 self._ack_now = False
                 return
@@ -734,6 +747,7 @@ class TCPCB:
         if decision == TCP_ACCEPT_AND_HANDLE:
 
             if self._h_rcv_rst(packet_rx=packet_rx):
+                self._tcpcb_lock.release()
                 return
 
             seq_acked = self._h_rcv_ack(packet_rx)
@@ -817,6 +831,7 @@ class TCPCB:
         if decision == TCP_ACCEPT_AND_HANDLE:
 
             if self._h_rcv_rst(packet_rx=packet_rx):
+                self._tcpcb_lock.release()
                 return
 
             seq_acked = self._h_rcv_ack(packet_rx)
@@ -891,6 +906,7 @@ class TCPCB:
         if decision == TCP_ACCEPT_AND_HANDLE:
 
             if self._h_rcv_rst(packet_rx=packet_rx):
+                self._tcpcb_lock.release()
                 return
 
             if not self._h_active_close_rx(packet_rx=packet_rx):
@@ -993,6 +1009,7 @@ class TCPCB:
         if decision == TCP_ACCEPT_AND_HANDLE:
 
             if self._h_rcv_rst(packet_rx=packet_rx):
+                self._tcpcb_lock.release()
                 return
 
             if not self._h_active_close_rx(packet_rx=packet_rx):
@@ -1037,6 +1054,7 @@ class TCPCB:
         if decision == TCP_ACCEPT_AND_HANDLE:
 
             if self._h_rcv_rst(packet_rx=packet_rx):
+                self._tcpcb_lock.release()
                 return
 
             if not self._h_active_close_rx(packet_rx=packet_rx):
@@ -1374,9 +1392,8 @@ class TCPCB:
                 level='ERROR'
             )
 
-        #TODO: SINS NO SUPPORT FOR LISTEN STATE
-        # SO JUST GO TO CLOSED STATE
         self._change_state(new=STATES.CLOSED)
+        self._stop_all_timers()
         self._remove_tcpcb()
         return True
 
@@ -1388,7 +1405,7 @@ class TCPCB:
 
         if close_requested\
         and self._sock_opt.get((SOL_SOCKET, SO_LINGER), None) == _SO_LINGER_ON:
-            self._stop_rtx_timer()
+            self._stop_all_timers()
             self._send_rst()
             self._change_state(new=STATES.CLOSED)
             self._remove_tcpcb()
@@ -1406,7 +1423,7 @@ class TCPCB:
 
         if self._close_requested:
             if packet_rx.tcp.dlen:
-                self._stop_rtx_timer()
+                self._stop_all_timers()
                 self._drop_with_reset(packet_rx=packet_rx)
                 self._change_state(new=STATES.CLOSED)
                 self._remove_tcpcb()

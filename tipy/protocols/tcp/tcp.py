@@ -38,7 +38,7 @@ class TCPEventType(IntEnum):
     RX_SEGMENT  = 1  # prx_tcp
     CONNECT     = 2  # connect call
     SEND        = 3  # send call
-    TIMER       = 4  # schedule timer for the rex
+    RTX         = 4  # schedule timer for the retransmission
 
     def __str__(self):
         return self.name
