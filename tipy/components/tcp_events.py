@@ -70,19 +70,25 @@ class TCPEvents:
             self._cond.notify()
 
     def _tcp_events_loop(self):
-        __debug__ and log("stack",
-                          "TCP Events Started",
-                          level="INFO")
+        if __debug__:
+            log("stack",
+                "TCP Events Started",
+                level="INFO")
+
         while not self._stop_thread:
 
+            q = self._events_queue
+            cond = self._cond
+            handlers = self._events_map
+
             with self._cond:
-                if not self._events_queue:
-                    self._cond.wait()
-                l = len(self._events_queue)
+                if not q:
+                    cond.wait()
+                l = len(q)
 
             for x in range(min(MAX_EVENTS, l)):
-                ev = self._events_queue.popleft()
-                self._events_map[ev.type](ev)
+                ev = q.popleft()
+                handlers[ev.type](ev)
 
             sleep(0) # this may release the GIL. IDK...
 
