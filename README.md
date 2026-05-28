@@ -224,27 +224,6 @@ nmcli con up tap7
 ```
 - This activates the bridge, physical interface, and TAP device.
 
-# Python Environment Setup
-
-Set up a Python virtual environment before running tipy.
-
-## 1. Create a virtual environment
-
-```bash
-python3 -m venv venv
-```
-
-## 2. Activate the virtual environment
-```bash
-source venv/bin/activate
-```
-
-## 3. Install dependencies
-```bash
-pip install numba
-```
-- Note: tipy uses numba to speed up checksum calculations.
-
 ---
 
 # Running Your Scripts
