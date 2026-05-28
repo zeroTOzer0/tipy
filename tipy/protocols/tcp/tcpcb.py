@@ -41,7 +41,7 @@ TCP_DROP              =  3
 # to let other TCP sockets to send its own data.
 # TCPCB will automatically recall the appropriate send routine to send
 # other remaining data.
-TCP_MAX_TX_BYTES = 10000
+TCP_MAX_TX_BYTES = 20000
 
 # TODO: USE DYNAMIC RTO CALCULATIONS
 RTX_TIMEOUT = 1.5
@@ -264,15 +264,19 @@ class TCPCB:
             STATES.CLOSING: self._tcp_snd_closing
         }
 
-        # RFC 9293, Section 3.4: Sequence Numbers, page 19: receive section
-        # Rows: (SEG.LEN > 0, RCV.WND > 0)
-        # Cols: [0,0]=Zlen+Zwnd, [0,1]=Zlen, [1,0]=Zwnd, [1,1]=Normal
-        self._h_rcv_seq_map: dict[tuple[bool, bool], Callable] = {
-            (False, False )  : self._h_rcv_seq_zlen_zwnd,
-            (False, True  )  : self._h_rcv_seq_zlen,
-            (True,  False )  : self._h_rcv_seq_zwnd,
-            (True,  True  )  : self._h_rcv_seq_normal
-        }
+        # index 0b00 : zlen & zwnd
+        # index 0b01 : zlen only
+        # index 0b10 : zwnd only
+        # index 0b11 : normal
+        self._rcv_seq_map: list[Callable]= [
+            self._h_rcv_seq_zlen_zwnd,
+            self._h_rcv_seq_zwnd,
+            self._h_rcv_seq_zlen,
+            self._h_rcv_seq_normal
+        ]
+
+
+
 
     def __str__(self):
         return f"({self._lip}:{self._lp}, {self._rip}:{self._rp})"
@@ -1369,12 +1373,15 @@ class TCPCB:
 
     def _h_rcv_seq(self, packet_rx: PacketRX) -> int:
         """
-        Dispatch segment acceptance per RFC 9293 Table.
+        Dispatch segment acceptance per _rcv_seq_map list.
         """
-        has_data = bool(packet_rx.tcp.dlen +
-                        packet_rx.tcp.syn  +
-                        packet_rx.tcp.fin)
-        return self._h_rcv_seq_map[(has_data, bool(self._rcv_wnd))](packet_rx)
+        idx =  (1 if packet_rx.tcp.dlen
+                  + packet_rx.tcp.fin
+                  + packet_rx.tcp.syn
+                  else 0)
+
+        idx |= (2 if self._rcv_wnd else 0)
+        return self._rcv_seq_map[idx](packet_rx)
 
 
     def _h_rcv_rst(self, packet_rx: PacketRX) -> bool:
