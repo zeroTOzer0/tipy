@@ -1,4 +1,4 @@
-# tipy (version 1.0)
+# tipy - version: 1.0.1
 
 Beginner implementation of a TCP/IP stack in Python for learning purposes.  It draws inspiration from [PyTCP](https://github.com/ccie18643/PyTCP)'s modular architecture and zero-copy design, while introducing its own internal logic, architecture, and protocol handling.
 
