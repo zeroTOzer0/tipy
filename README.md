@@ -1,6 +1,6 @@
 # tipy - version: 1.0.1
 
-Educational userspace TCP/IP stack in Python. It is inspired by [PyTCP](https://github.com/ccie18643/PyTCP)'s modular architecture and zero-copy design, while adopting a more explicit and control-oriented internal architecture for protocol handling.
+Educational userspace TCP/IP stack in Python. It is inspired by [PyTCP](https://github.com/ccie18643/PyTCP)'s v2 modular architecture and zero-copy design, while adopting a more explicit and control-oriented internal architecture for protocol handling.
 
 ---
 
