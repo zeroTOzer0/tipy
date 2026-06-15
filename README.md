@@ -27,7 +27,7 @@ Educational userspace TCP/IP stack in Python. It is inspired by [PyTCP](https://
 ## Layer 3 — Network Layer
 
 ### IPv4
-- Full IPv4 support
+- IPv4 support
 - IP fragmentation and reassembly
 
 ### Routing
@@ -57,9 +57,8 @@ Educational userspace TCP/IP stack in Python. It is inspired by [PyTCP](https://
 
 ### TCP
 Basic TCP implementation with support for:
-
-- MSS (Maximum Segment Size)
 - TCP options:
+  - MSS (Maximum Segment Size) 
   - EOL
   - NOP
 
