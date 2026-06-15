@@ -1,15 +1,15 @@
-from typing import Any
-
 from tipy.lib.socket import (Socket,
                              AF_INET,
                              SOCK_STREAM)
-from tipy.lib import stack
-from tipy.lib.socket_errors import gaierror
 
-from tipy.lib.ip_address import IPAddress, IPFormatError
+from tipy.lib import stack
+from tipy.lib.ip_address import IPAddress
 from tipy.lib.logger import log
-from tipy.protocols.tcp.tcpcb import TCPCB
 from threading import Condition
+
+from tipy.protocols.tcp.tcp_usrreq import (
+    tcp_bind, tcp_connect, tcp_send, tcp_recv, tcp_close, tcp_shutdown
+)
 
 
 class TCPSocket(Socket):
@@ -36,37 +36,11 @@ class TCPSocket(Socket):
 
 
     def bind(self, address: tuple[str, int]):
-        try:
-            if str(IPAddress(address[0])) != str(stack.core.unicast_ip):
-                raise OSError('[Errno 99] Cannot assign requested address')
-            self.local_ip = IPAddress(address[0])
-        except IPFormatError:
-            raise gaierror('[Errno -2] Name or service not known')
-
-        if self.local_port in range(1, 65535):
-            # Already bound, cannot bind again
-            # this raise an exception when we call
-            # bind call more than one time
-            raise OSError("[Errno 22] Invalid argument")
-
-        self.local_port = address[1]
-
-        if stack.core.tcp.check_bound((self.local_ip.ip_address,
-                                    self.local_port)):
-            raise OSError("[Errno 98] Address already in use")
-
-        self.sock_id = (
-            self.local_ip.ip_address, self.local_port,
-            self.remote_ip.ip_address, self.remote_port
-        )
-        stack.core.tcp.register_socket(self.sock_id, self)
-        stack.core.tcp.register_bound_socket((self.local_ip.ip_address,
-                                              self.local_port))
-
+        tcp_bind(self=stack.core, so=self, address=address)
         if __debug__:
             log(
                 "socket",
-                f"{self} bound to {self.local_ip}:{self.local_port}",
+                f"{self} bound to {address[0]}:{address[1]}",
                 level="INFO"
             )
 
@@ -74,51 +48,7 @@ class TCPSocket(Socket):
         ...
 
     def connect(self, address: tuple[str, int]):
-        self.remote_ip = IPAddress(address[0])
-        self.remote_port = address[1]
-
-        if not self.local_port:
-            self.local_port = stack.core.tcp.pick_ephemeral_tcp_port()
-            # just select the configured IP
-            self.local_ip : IPAddress = stack.core.unicast_ip
-
-            self.sock_id = (
-                self.local_ip.ip_address, self.local_port,
-                self.remote_ip.ip_address, self.remote_port
-            )
-
-            stack.core.tcp.register_socket(self.sock_id, self)
-
-        else:
-            self.sock_id = (
-                self.local_ip.ip_address, self.local_port,
-                self.remote_ip.ip_address, self.remote_port
-            )
-
-            stack.core.tcp.update_socket(
-                (self.local_ip.ip_address, self.local_port, '0.0.0.0', 0 ),
-                self.sock_id,
-                self
-            )
-
-
-        # create a TCPCB and register it: STATE=CLOSED
-        tcpcb = TCPCB(local_ip=self.local_ip,
-                      local_port=self.local_port,
-                      remote_ip=self.remote_ip,
-                      remote_port=self.remote_port,
-                      connect_events=self.connect_events,
-                      rcv_events=self.rcv_events,
-                      send_events= self.send_events,
-                      close_events=self.close_events,
-                      sock_opt= self.sock_opt,
-                      core=stack.core)
-
-        stack.core.tcp.register_tcpcb(sock_id=self.sock_id, tcpcb=tcpcb)
-        with self.connect_events:
-            tcpcb.activ_open()
-            self.connect_events.wait()
-
+        tcp_connect(self=stack.core, so=self, address=address)
         if __debug__:
             log(
                 "socket",
@@ -132,13 +62,10 @@ class TCPSocket(Socket):
         if __debug__:
             log(
                 "socket",
-                f"{self} socket closed",
+                f"{self} socket close",
                 level="INFO"
             )
-        return stack.core.tcp.tcpcbs[(
-            self.local_ip.ip_address, self.local_port,
-            self.remote_ip.ip_address, self.remote_port
-        )].tcp_close()
+        tcp_close(self=stack.core, so=self)
 
     def shutdown(self):
         if __debug__:
@@ -147,10 +74,7 @@ class TCPSocket(Socket):
                 f"{self} socket shutdown",
                 level="INFO"
             )
-        return stack.core.tcp.tcpcbs[(
-            self.local_ip.ip_address, self.local_port,
-            self.remote_ip.ip_address, self.remote_port
-        )].tcp_shutdown()
+        tcp_shutdown(self=stack.core, so=self)
 
     def send(self, data: bytes) -> int:
         if __debug__:
@@ -161,10 +85,7 @@ class TCPSocket(Socket):
                 level="INFO"
             )
 
-        return stack.core.tcp.tcpcbs[(
-            self.local_ip.ip_address, self.local_port,
-            self.remote_ip.ip_address, self.remote_port
-        )].tcp_send(memoryview(data))
+        return tcp_send(self=stack.core, so=self, data=data)
 
     def recv(self, bufsize: int):
         if __debug__:
@@ -174,11 +95,7 @@ class TCPSocket(Socket):
                 f"read {bufsize}B from receive buffer",
                 level="INFO"
             )
-        data = stack.core.tcp.tcpcbs[(
-            self.local_ip.ip_address, self.local_port,
-            self.remote_ip.ip_address, self.remote_port
-        )].tcp_recv(bufsize=bufsize)
-
+        data = tcp_recv(self=stack.core, so=self, bufsize=bufsize)
         return  b''.join(_.tobytes() for _ in data)
 
     def settimeout(self, t):

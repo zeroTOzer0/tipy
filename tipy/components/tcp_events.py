@@ -12,24 +12,29 @@ if TYPE_CHECKING:
     from tipy.components.core import Core
 
 
+from tipy.protocols.tcp.tcp_fsm import connect, tx, rx, rtx
 
-MAX_EVENTS = 1000
+MAX_EVENTS = 5000
 
 
 def _h_active_open_event(event: TCPEvent):
-    event.tcpcb.activ_open()
+    tcpcb = event.tcpcb
+    connect(tcpcb=tcpcb)
 
 
-def _h_rx_segment_event(event: TCPEvent, ):
-    event.tcpcb.rx(event.packet_rx)
+def _h_rx_segment_event(event: TCPEvent):
+    tcpcb = event.tcpcb
+    rx(tcpcb=tcpcb, packet_rx=event.packet_rx)
 
 
 def _h_send_event(event: TCPEvent):
-    event.tcpcb.tx()
+    tcpcb = event.tcpcb
+    tx(tcpcb=tcpcb)
 
 
-def _h_timer_event(event: TCPEvent):
-    event.tcpcb.retransmit()
+def _h_rtx_event(event: TCPEvent):
+    tcpcb = event.tcpcb
+    rtx(tcpcb=tcpcb)
 
 
 class TCPEvents:
@@ -46,7 +51,7 @@ class TCPEvents:
             TCPEventType.CONNECT     : _h_active_open_event,
             TCPEventType.RX_SEGMENT  : _h_rx_segment_event,
             TCPEventType.SEND        : _h_send_event,
-            TCPEventType.RTX         : _h_timer_event
+            TCPEventType.RTX         : _h_rtx_event
         }
 
 

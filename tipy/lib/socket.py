@@ -79,7 +79,7 @@ class Socket(ABC):
         self.__family: AddressFamily
         self.__type: SocketType
 
-        self.sock_opt: dict[tuple[OptionLevel, OptionName], int | bytes] | None = None
+        self.sock_opt: dict[tuple[OptionLevel, OptionName], int | bytes] = dict()
 
     def __str__(self):
         return f'{self.family}/{self.type}'

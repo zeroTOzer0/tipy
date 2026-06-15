@@ -19,17 +19,17 @@ TCP_NOP_KIND = 1
 TCP_MSS_KIND = 2
 
 class STATES(IntEnum):
-    CLOSED        =      1
-    LISTEN        =      2
-    SYN_SENT      =      3
-    SYN_RECV      =      4
-    ESTAB         =      5
-    FIN_WAIT_1    =      6
-    FIN_WAIT_2    =      7
-    CLOSE_WAIT    =      8
-    CLOSING       =      9
-    LAST_ACK      =      10
-    TIME_WAIT     =      11
+    LISTEN        =      0
+    SYN_SENT      =      1
+    SYN_RECV      =      2
+    ESTAB         =      3
+    FIN_WAIT_1    =      4
+    FIN_WAIT_2    =      5
+    CLOSE_WAIT    =      6
+    CLOSING       =      7
+    LAST_ACK      =      8
+    TIME_WAIT     =      9
+    CLOSED        =      10
 
     def __str__(self):
         return self.name
@@ -48,20 +48,15 @@ class TCPEvent:
                  type_: TCPEventType,
                  tcpcb: TCPCB,
                  packet_rx: PacketRX|None=None,
-                 data: memoryview|None=None,
-                 call: Callable|None = None):
-
-        self.call = call
+                 ):
         self.type = type_
         self.tcpcb = tcpcb
         self.packet_rx = packet_rx
-        self.data = data
 
     def __str__(self):
         return (
             f"TCP Event, type: {self.type}, "
-            f"{f"packet_rx: {self.packet_rx.tracker}" if self.packet_rx else ""}, "
-            f"{f"dlen: {self.data}" if self.data else ""}"
+            f"{f"packet_rx: {self.packet_rx.tracker}" if self.packet_rx else ""}"
         )
 
 NON_RECEIVABLE_STATES: set[int] = {STATES.CLOSE_WAIT,
