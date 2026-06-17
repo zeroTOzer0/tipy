@@ -720,6 +720,10 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
 
         if _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx) > 0:
 
+            # l is the number of bytes enqueued into rcv_buf if data is received in this state (SYN-SENT);
+            # used to control recv notification.
+            l = 0
+
             tcpcb.irs = packet_rx.tcp.seq
 
             # Directly initialize SND.WND/WL1/WL2/RCV.NXT/RCV.ADV in SYN-SENT.
@@ -745,6 +749,33 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
                     level="INFO"
                 )
 
+            # If the segment contains data, buffer it into rcv_buf.
+            # Since _append_rcv_data() notifies the application whenever data becomes
+            # available in rcv_buf, do not use _append_rcv_data() here; enqueue it manually.
+            if packet_rx.tcp.dlen > 0:
+                with tcpcb.tcpcb_lock:
+                    rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
+                    rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
+
+                l = tcpcb.rcv_buf.enqueue(
+                    w_offset=rcv_w_buf_offset,
+                    r_offset=rcv_r_buf_offset,
+                    buffer=packet_rx.tcp.data
+                )
+
+                tcpcb.rcv_wnd -= l
+
+                # move on the write offset
+                with tcpcb.tcpcb_lock:
+                    tcpcb.rcv_w_buf_offset = (
+                            (tcpcb.rcv_w_buf_offset + l) % len(tcpcb.rcv_buf)
+                    )
+
+                if __debug__:
+                    log("tcpcb",
+                        f"{tcpcb}: pre-ESTABLISHED data received (buffered)",
+                        level="INFO")
+
             tcpcb.core.tx_tcp(
                 local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
                 local_port=tcpcb.lp, remote_port=tcpcb.rp,
@@ -757,6 +788,11 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
 
             with tcpcb.connect_events:
                 tcpcb.connect_events.notify()
+
+            # notify the application if we recv some data in this stage
+            if l > 0:
+                with tcpcb.recv_events:
+                    tcpcb.recv_events.notify()
 
 def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
     """
