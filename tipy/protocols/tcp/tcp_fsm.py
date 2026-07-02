@@ -152,7 +152,7 @@ def _drop_with_reset(tcpcb: TCPCB, packet_rx: PacketRX):
         tcpcb.core.tx_tcp(
             local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
             local_port=tcpcb.lp, remote_port=tcpcb.rp,
-            seq=tcpcb.snd_nxt, ack_seq=0,
+            seq=packet_rx.tcp.ack_seq, ack_seq=0,
             rst=True,
             window=0,
         )
@@ -689,8 +689,6 @@ def _drain_snd_buf(tcpcb: TCPCB) -> list[memoryview]:
 
 def _init_snd_seq(tcpcb: TCPCB):
     tcpcb.snd_una = tcpcb.iss
-    # sins this stack does not support sending data at none-sync states
-    # we advance only by 1
     tcpcb.snd_nxt = tcpcb.iss
     tcpcb.snd_max = tcpcb.snd_nxt
 
@@ -710,25 +708,23 @@ def _init_rcv_seq(tcpcb: TCPCB, packet_rx: PacketRX):
         
 
 def _activ_open(tcpcb: TCPCB):
-    if tcpcb.state == STATES.CLOSED:
+    tcpcb.core.tx_tcp(
+        local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
+        local_port=tcpcb.lp, remote_port=tcpcb.rp,
+        seq=tcpcb.iss,
+        syn=True,
+        window=DEFAULT_RCV_WND,
+        options=[TCPOptMSS()]
+    )
+    _init_snd_seq(tcpcb=tcpcb)
 
-        tcpcb.core.tx_tcp(
-            local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
-            local_port=tcpcb.lp, remote_port=tcpcb.rp,
-            seq=tcpcb.iss,
-            syn=True,
-            window=DEFAULT_RCV_WND,
-            options=[TCPOptMSS()]
-        )
-        _init_snd_seq(tcpcb=tcpcb)
+    tcpcb.snd_nxt = (
+        (tcpcb.snd_nxt + 1) & 0xFF_FF_FF_FF
+    )
+    tcpcb.snd_max = tcpcb.snd_nxt
 
-        tcpcb.snd_nxt = (
-                (tcpcb.snd_nxt + 1) & 0xFF_FF_FF_FF
-        )
-        tcpcb.snd_max = tcpcb.snd_nxt
-
-        _change_state(tcpcb=tcpcb, new=STATES.SYN_SENT)
-        start_rtx_timer(tcpcb=tcpcb)
+    _change_state(tcpcb=tcpcb, new=STATES.SYN_SENT)
+    start_rtx_timer(tcpcb=tcpcb)
 
 def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
     """
@@ -814,8 +810,15 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
                     tcpcb.recv_events.notify()
             return
 
+        # The ACK does not ack our SYN.
+        # This may indicate a half-open connection. Send a RST and
+        # let retransmission restart the handshake. [RFC 9293, 3.5.1]
+        _drop_with_reset(tcpcb=tcpcb, packet_rx=packet_rx)
+        return
+
     # Handle simultaneous open.
     if packet_rx.tcp.syn:
+        stop_rtx_timer(tcpcb=tcpcb)
         # Retransmit our original SYN.
         _rollback_to_una(tcpcb=tcpcb)
         
@@ -833,6 +836,7 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
         tcpcb.snd_nxt = (
             (tcpcb.snd_nxt + 1) & 0xFF_FF_FF_FF
         )
+        start_rtx_timer(tcpcb=tcpcb)
 
         _change_state(tcpcb=tcpcb, new=STATES.SYN_RECV)
 
@@ -900,6 +904,8 @@ def _rx_syn_recv(tcpcb: TCPCB, packet_rx: PacketRX):
             with tcpcb.connect_events:
                 tcpcb.connect_events.notify()
 
+
+        _drop_with_reset(tcpcb=tcpcb, packet_rx=packet_rx)
         return
 
 
