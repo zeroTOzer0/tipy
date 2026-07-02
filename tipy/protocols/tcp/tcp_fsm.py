@@ -1,4 +1,3 @@
-# functions that handle rx/tx segments in each tcp state
 from __future__ import annotations
 
 from struct import pack
@@ -13,7 +12,6 @@ from tipy.protocols.tcp.tcp_seq import (
     last_seq
 )
 
-from tipy.protocols.tcp.tcp import STATES, TCP_MSS_KIND, TCPEvent, TCPEventType
 from tipy.protocols.tcp.tcpcb import remove_tcpcb
 from tipy.lib.socket import SOL_SOCKET, SO_LINGER
 from tipy.protocols.tcp.builder import TCPOptMSS
@@ -23,6 +21,12 @@ start_time_wait_timer,
 stop_rtx_timer,
 stop_time_wait_timer,
 stop_all_timers
+)
+from tipy.protocols.tcp.tcp import (
+STATES,
+TCP_MSS_KIND,
+TCPEvent,
+TCPEventType
 )
 
 from typing import Callable, TYPE_CHECKING
@@ -316,69 +320,67 @@ def _h_rx_seq_zwnd(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
 
 def _h_rx_seq_normal(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     """
-    Verify that the segment overlaps the RCV.WND:
-    RCV.NXT <= SEG.SEQ <= RCV.NXT + RCV.WND
-    or
-    RCV.NXT <= SEG.SEQ + SEG.LEN - 1 <= RCV.NXT + RCV.WND
-    Update RCV.NXT when applicable and compute the offset and
-    length of the acceptable data within the segment
-    (_tcp_data_start and _tcp_data_len).
-    Returns TCP_ACCEPT_AND_HANDLE for acceptable in-order data.
-    Returns TCP_ACCEPT_AND_BUFFER for acceptable out-of-order segments.
-    TCP_DROP otherwise.
+    Classify a segment as in-order, out-of-order, or invalid.
+    In-order: SEG.SEQ <= RCV.NXT <= SEG.LAST
+    Out-of-order: RCV.NXT < SEG.SEQ < RCV.ADV
+    In-order data is trimmed to the rcv_wnd
+    and RCV.NXT is advanced accordingly.
     """
     # NOTE: returned TCP_ACCEPT_BUT_BUFFER means ooo but not yet supported
 
-    # check if this is an in-order segment
+    last_seq_ = last_seq(packet_rx=packet_rx)
+
+    # In-order segment. RCV.NXT falls within the segment's
+    # sequence range, so the receive stream can advance.
     if seq_leq(packet_rx.tcp.seq, tcpcb.rcv_nxt) \
-    and seq_leq(tcpcb.rcv_nxt, last_seq(packet_rx=packet_rx)):
-
-        old_rcv_nxt = tcpcb.rcv_nxt
-
-        new_rcv_nxt = (
-            (last_seq(packet_rx) + 1) & 0xFF_FF_FF_FF
-            if seq_lt(last_seq(packet_rx), tcpcb.rcv_adv)
-            else tcpcb.rcv_adv
-        )
-        # calculate the start & end of the acceptable segment's data
-        tcpcb.tcp_data_start = seq_diff(old_rcv_nxt, packet_rx.tcp.seq)
-        tcpcb.tcp_data_len = seq_diff(new_rcv_nxt, old_rcv_nxt)
-
-        # if the segment contain FIN flags
-        # trim it from the calculation of
-        # the acceptable data length
-        tcpcb.tcp_data_len -= packet_rx.tcp.fin
-
-        tcpcb.rcv_nxt = new_rcv_nxt
+    and seq_geq(last_seq_, tcpcb.rcv_nxt):
 
         if __debug__:
-            seq = packet_rx.tcp.seq
-            last = last_seq(packet_rx)
+            msg = ""
+            if seq_lt(packet_rx.tcp.seq, tcpcb.rcv_nxt):
+                msg += f"---seq({packet_rx.tcp.seq})---rcv_nxt({tcpcb.rcv_nxt})"
+
+            elif packet_rx.tcp.seq == tcpcb.rcv_nxt:
+                msg += f"---seq({packet_rx.tcp.seq})=rcv_nxt({tcpcb.rcv_nxt})"
+
+            if seq_gt(last_seq_, tcpcb.rcv_adv):
+                msg += f"---rcv_adv({tcpcb.rcv_adv})---last_seq({last_seq_})"
+
+            elif last_seq_ == tcpcb.rcv_adv:
+                msg += f"---last_seq({last_seq_})=rcv_adv({tcpcb.rcv_adv})"
+
+            elif seq_lt(last_seq_, tcpcb.rcv_adv):
+                msg += f"---last_seq({last_seq_})---rcv_adv({tcpcb.rcv_adv})"
 
             log(
                 "tcpcb",
-                (
-                    f"{tcpcb}: in-order segment "
-                    f"(SEQ={seq}, RCV.NXT={old_rcv_nxt}, LAST_SEQ={last}), "
-                    f"data_range=[{tcpcb.tcp_data_start}:{tcpcb.tcp_data_len}]"
-                ),
-                level="DEBUG"
+                f"{msg} -> IN-ORDER SEG",
+                "DEBUG"
             )
+
+        todrop = seq_diff(tcpcb.rcv_nxt, packet_rx.tcp.seq)
+
+        packet_rx.tcp.seq = (
+                (packet_rx.tcp.seq + todrop) & 0xFF_FF_FF_FF
+        )
+
+        packet_rx.tcp.dlen -= (todrop - packet_rx.tcp.fin - packet_rx.tcp.syn)
+
+        tcpcb.tcp_data_start = todrop
+        tcpcb.tcp_data_len = min(seq_diff(tcpcb.rcv_adv, tcpcb.rcv_nxt),
+                                 seq_diff(last_seq_ + 1, tcpcb.rcv_nxt))
+
+        tcpcb.rcv_nxt = (tcpcb.rcv_nxt + tcpcb.tcp_data_len) & 0xFF_FF_FF_FF
+
+        if packet_rx.tcp.fin\
+        and seq_geq(last_seq_, tcpcb.rcv_adv):
+            packet_rx.tcp.flags &= ~0x01
 
         return TCP_ACCEPT_AND_HANDLE
 
-    # check if this is an ooo segment
-    if not seq_leq(packet_rx.tcp.seq, tcpcb.rcv_nxt) \
+    # check for ooo
+    if seq_gt(packet_rx.tcp.seq, tcpcb.rcv_nxt) \
     and seq_lt(packet_rx.tcp.seq, tcpcb.rcv_adv):
-        if __debug__:
-            seq = packet_rx.tcp.seq
-
-            log(
-                "tcpcb",
-                f"{tcpcb}: out-of-order segment "
-                f"(RCV.NXT={tcpcb.rcv_nxt}, SEQ={seq}, RCV.ADV={tcpcb.rcv_adv})",
-                level="DEBUG"
-            )
         return TCP_ACCEPT_BUT_BUFFER
 
     return TCP_DROP
@@ -478,7 +480,7 @@ def _rollback_to_una(tcpcb: TCPCB):
         log(
             'tcpcb',
             f'rollback snd_nxt({tcpcb.snd_nxt}) to snd_una({tcpcb.snd_una}) '
-            f'({seq_diff(tcpcb.snd_nxt, tcpcb.snd_una)} unacked) on RTO',
+            f'({seq_diff(tcpcb.snd_nxt, tcpcb.snd_una)} unacked)',
             'DEBUG'
         )
     tcpcb.snd_r_temp_buf_offset = tcpcb.snd_r_buf_offset
@@ -685,6 +687,28 @@ def _drain_snd_buf(tcpcb: TCPCB) -> list[memoryview]:
     )
 
 
+def _init_snd_seq(tcpcb: TCPCB):
+    tcpcb.snd_una = tcpcb.iss
+    # sins this stack does not support sending data at none-sync states
+    # we advance only by 1
+    tcpcb.snd_nxt = tcpcb.iss
+    tcpcb.snd_max = tcpcb.snd_nxt
+
+def _init_snd_wnd(tcpcb: TCPCB, packet_rx: PacketRX):
+    tcpcb.snd_wnd = packet_rx.tcp.window
+    tcpcb.snd_wl1 = packet_rx.tcp.seq
+    tcpcb.snd_wl2 = packet_rx.tcp.ack_seq
+    
+    
+
+def _init_rcv_seq(tcpcb: TCPCB, packet_rx: PacketRX):
+    tcpcb.irs = packet_rx.tcp.seq
+    tcpcb.rcv_nxt = (tcpcb.irs + 1) & 0xFF_FF_FF_FF
+    tcpcb.rcv_adv = (tcpcb.rcv_nxt + tcpcb.rcv_wnd) \
+                    & 0xFF_FF_FF_FF  # rcv_adv: the first seq not expected
+    
+        
+
 def _activ_open(tcpcb: TCPCB):
     if tcpcb.state == STATES.CLOSED:
 
@@ -696,47 +720,40 @@ def _activ_open(tcpcb: TCPCB):
             window=DEFAULT_RCV_WND,
             options=[TCPOptMSS()]
         )
+        _init_snd_seq(tcpcb=tcpcb)
 
-        tcpcb.snd_una = tcpcb.iss
-        # we sent only seg with syn flag so SEG.LEN = 1
-        tcpcb.snd_nxt = (tcpcb.iss + 1) & 0xFF_FF_FF_FF
+        tcpcb.snd_nxt = (
+                (tcpcb.snd_nxt + 1) & 0xFF_FF_FF_FF
+        )
         tcpcb.snd_max = tcpcb.snd_nxt
 
         _change_state(tcpcb=tcpcb, new=STATES.SYN_SENT)
+        start_rtx_timer(tcpcb=tcpcb)
 
 def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
     """
     Handle received segment when the TCP on the SYN_SENT State
     """
-    # NOTE: no support for the Simultaneous Connection Synchronization
-
     if _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx):
         return
 
     if packet_rx.tcp.fin:
         return  # FIXME
 
-    if all((packet_rx.tcp.syn, packet_rx.tcp.ack)):
+    if(
+        packet_rx.tcp.syn and packet_rx.tcp.ack
+    ):
 
         if _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx) > 0:
+
+            stop_rtx_timer(tcpcb=tcpcb)
 
             # l is the number of bytes enqueued into rcv_buf if data is received in this state (SYN-SENT);
             # used to control recv notification.
             l = 0
 
-            tcpcb.irs = packet_rx.tcp.seq
-
-            # Directly initialize SND.WND/WL1/WL2/RCV.NXT/RCV.ADV in SYN-SENT.
-            # Using _h_rcv_wnd() here is unsafe because sequence/window state
-            # is not yet synchronized and the function relies on chronologically
-            # ordered SEQ/ACK checks.
-            tcpcb.snd_wnd = packet_rx.tcp.window
-            tcpcb.snd_wl1 = packet_rx.tcp.seq
-            tcpcb.snd_wl2 = packet_rx.tcp.ack_seq
-
-            tcpcb.rcv_nxt = (tcpcb.irs + 1) & 0xFF_FF_FF_FF
-            tcpcb.rcv_adv = (tcpcb.rcv_nxt + tcpcb.rcv_wnd) \
-                                 & 0xFF_FF_FF_FF  # rcv_adv: the first seq not expected
+            _init_rcv_seq(tcpcb=tcpcb, packet_rx=packet_rx)
+            _init_snd_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
             # extract the MSS, if no MSS options
             # exists use the default MSS: 536
@@ -765,6 +782,8 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
 
                 tcpcb.rcv_wnd -= l
 
+                tcpcb.rcv_nxt = (tcpcb.rcv_nxt + l) & 0xFF_FF_FF_FF
+
                 # move on the write offset
                 with tcpcb.tcpcb_lock:
                     tcpcb.rcv_w_buf_offset = (
@@ -779,9 +798,9 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
             tcpcb.core.tx_tcp(
                 local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
                 local_port=tcpcb.lp, remote_port=tcpcb.rp,
-                seq=tcpcb.snd_una, ack_seq=tcpcb.rcv_nxt,
+                seq=tcpcb.snd_nxt, ack_seq=tcpcb.rcv_nxt,
                 ack=True,
-                window=DEFAULT_RCV_WND,
+                window=tcpcb.rcv_wnd,
             )
 
             _change_state(tcpcb=tcpcb, new=STATES.ESTAB)
@@ -793,6 +812,113 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
             if l > 0:
                 with tcpcb.recv_events:
                     tcpcb.recv_events.notify()
+            return
+
+    # Handle simultaneous open.
+    if packet_rx.tcp.syn:
+        # Retransmit our original SYN.
+        _rollback_to_una(tcpcb=tcpcb)
+        
+        _init_rcv_seq(tcpcb=tcpcb, packet_rx=packet_rx)
+        _init_snd_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
+
+        tcpcb.core.tx_tcp(
+            local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
+            local_port=tcpcb.lp, remote_port=tcpcb.rp,
+            seq=tcpcb.snd_nxt, ack_seq=tcpcb.rcv_nxt,
+            syn=True, ack=True,
+            window=tcpcb.rcv_wnd,
+        )
+
+        tcpcb.snd_nxt = (
+            (tcpcb.snd_nxt + 1) & 0xFF_FF_FF_FF
+        )
+
+        _change_state(tcpcb=tcpcb, new=STATES.SYN_RECV)
+
+def _tx_syn_sent(tcpcb: TCPCB):
+    """ tx h for syn_sent """
+
+    # only retransmission invokes this routine
+    tcpcb.core.tx_tcp(
+        local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
+        local_port=tcpcb.lp, remote_port=tcpcb.rp,
+        seq=tcpcb.snd_nxt, ack_seq=tcpcb.rcv_nxt,
+        syn=True,
+        window=tcpcb.rcv_wnd,
+    )
+
+    tcpcb.snd_nxt = (
+        (tcpcb.snd_nxt + 1) & 0xFF_FF_FF_FF
+    )
+
+    start_rtx_timer(tcpcb=tcpcb)
+
+def _rx_syn_recv(tcpcb: TCPCB, packet_rx: PacketRX):
+    """ rx h for syn recv"""
+
+    # NOTE: LISTEN is not implemented yet.
+    # SYN-RECV is reachable only through simultaneous open.
+
+    if not packet_rx.tcp.ack:
+        return
+
+    if packet_rx.tcp.syn:
+
+        if seq_lt(packet_rx.tcp.seq, tcpcb.irs):
+            _drop_with_reset(tcpcb=tcpcb, packet_rx=packet_rx)
+            return
+
+        todrop = (tcpcb.rcv_nxt - packet_rx.tcp.seq)
+
+        if todrop > 0:
+            packet_rx.tcp.seq = (
+                (packet_rx.tcp.seq + 1) & 0xFF_FF_FF_FF
+            )
+
+            # We already consumed the peer's SYN when entering SYN_RECV.
+            # Any SYN seen here is therefore treated as a retransmitted SYN.
+            packet_rx.tcp.flags &= ~0x02
+
+        # ignore any received data
+        packet_rx.tcp.dlen = 0
+
+        # Do not drop purely due to OOO sequence or SYN mismatch.
+        # As long as the segment is within the receive window and ACK is valid,
+        # let sync-states handle SYN inconsistencies (e.g. via challenge ACK).
+        if _h_rx_seq(tcpcb=tcpcb, packet_rx=packet_rx) == TCP_DROP:
+            _send_ack(tcpcb=tcpcb)
+            return
+
+        if _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx) > 0:
+
+            stop_rtx_timer(tcpcb=tcpcb)
+
+            _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
+            _send_ack(tcpcb=tcpcb)
+            _change_state(tcpcb=tcpcb, new=STATES.ESTAB)
+            with tcpcb.connect_events:
+                tcpcb.connect_events.notify()
+
+        return
+
+
+def _tx_syn_recv(tcpcb: TCPCB):
+    """ tx h for syn recv state """
+    tcpcb.core.tx_tcp(
+        local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
+        local_port=tcpcb.lp, remote_port=tcpcb.rp,
+        seq=tcpcb.snd_nxt, ack_seq=tcpcb.rcv_nxt,
+        syn=True, ack=True,
+        window=tcpcb.rcv_wnd,
+    )
+
+    tcpcb.snd_nxt = (
+            (tcpcb.snd_nxt + 1) & 0xFF_FF_FF_FF
+    )
+    start_rtx_timer(tcpcb=tcpcb)
+
+
 
 def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
     """
@@ -829,9 +955,8 @@ def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
             with tcpcb.send_events:
                 tcpcb.send_events.notify()
 
-        # check if the segment contains FIN and this FIN overlaps our window
-        if packet_rx.tcp.fin\
-        and seq_gt(tcpcb.rcv_adv, last_seq(packet_rx=packet_rx)):
+        # check if the segment contains FIN
+        if packet_rx.tcp.fin:
             _change_state(tcpcb=tcpcb, new=STATES.CLOSE_WAIT)
             # application may block at the tcp_recv userreq, so notify
             # him to indicates the end of the remote's data
@@ -940,10 +1065,7 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
         if tcpcb.snd_nxt == tcpcb.snd_una:
             stop_rtx_timer(tcpcb=tcpcb)
 
-            # check if the rx segment contains FIN and this FIN
-            # overlaps our window
-            if packet_rx.tcp.fin \
-            and seq_lt(last_seq(packet_rx=packet_rx), tcpcb.rcv_adv):
+            if packet_rx.tcp.fin:
                 _change_state(tcpcb=tcpcb, new=STATES.TIME_WAIT)
                 start_time_wait_timer(tcpcb=tcpcb)
 
@@ -952,9 +1074,7 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
 
         else:
             # our fin not acked yet. check if the rx segment contains FIN
-            # and this FIN overlaps our windows
-            if packet_rx.tcp.fin \
-            and seq_lt(last_seq(packet_rx=packet_rx), tcpcb.rcv_adv):
+            if packet_rx.tcp.fin:
                 _change_state(tcpcb=tcpcb, new=STATES.CLOSING)
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -1046,10 +1166,7 @@ def _rx_fin_wait_2(tcpcb: TCPCB, packet_rx: PacketRX):
         _ = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
-        # check if the rx segment contains FIN and this FIN
-        # overlaps our window.
-        if packet_rx.tcp.fin\
-        and seq_gt(tcpcb.rcv_adv, last_seq(packet_rx=packet_rx)):
+        if packet_rx.tcp.fin:
             _change_state(tcpcb=tcpcb, new=STATES.TIME_WAIT)
             start_time_wait_timer(tcpcb=tcpcb)
 
@@ -1214,7 +1331,7 @@ def _tx_close_wait(tcpcb: TCPCB):
                 return
 
         if tcpcb.ack_now:
-            # ESTAB is going to CLOSE_WAIT when an acceptable FIN  recvd
+            # ESTAB is going to CLOSE_WAIT when an acceptable FIN recvd
             # so that there is a pending ack must be sent
             _send_ack(tcpcb=tcpcb)
             tcpcb.ack_now = False
@@ -1305,7 +1422,7 @@ def _rx_time_wait(tcpcb: TCPCB, packet_rx: PacketRX):
 _rx_map: list[Callable | None] = [
     None, # rx_listen not implemented yet
     _rx_syn_sent,
-    None, # rx_syn_recv not implemented yet
+    _rx_syn_recv,
     _rx_estab,
     _rx_fin_wait_1,
     _rx_fin_wait_2,
@@ -1317,8 +1434,8 @@ _rx_map: list[Callable | None] = [
 
 _tx_map: list[Callable | None] = [
     None, # tx_listen not implemented yet,
-    None, # tx_syn_sent not implemented yet,
-    None, # tx_syn_recv not implemented yet,
+    _tx_syn_sent,
+    _tx_syn_recv,
     _tx_estab,
     _tx_fin_wait_1,
     _tx_fin_wait_2,
