@@ -12,10 +12,11 @@ if TYPE_CHECKING:
 
 def rx_tcp(self: Core, packet_rx: PacketRX):
     TCPParser(packet_rx)
-    __debug__ and log(
+    if __debug__:
+        log(
         'tcp',
         f'{packet_rx.tracker} - {packet_rx.tcp}'
-    )
+        )
 
     sock_id: tuple = (
         packet_rx.ip.dst, packet_rx.tcp.dst,
@@ -35,18 +36,37 @@ def rx_tcp(self: Core, packet_rx: PacketRX):
 
 
 
-    if packet_rx.tcp.syn and not packet_rx.tcp.ack:
+    # Generate RST for a non-existent connection.
+    # if ACK is set, then: SEQ = SEG.ACK.
+    # Otherwise: SEQ = 0, ACK = SEG.SEQ + SEG.LEN.
+    # [RFC 9293: 3.5.2. Reset Generation]
+
+    if __debug__:
         log(
             "tcp",
-            f'receive SYN from [{packet_rx.tracker}] on closed port, send RST',
+            f"received segment [{packet_rx.tracker}] for a closed connection; sending RST",
             "INFO"
         )
+    if packet_rx.tcp.ack:
 
         self.tx_tcp(
             local_ip=IPAddress(packet_rx.ip.dst), local_port=packet_rx.tcp.dst,
             remote_ip=IPAddress(packet_rx.ip.src), remote_port=packet_rx.tcp.src,
-            seq=0, ack_seq=packet_rx.tcp.seq+1,
-            rst=True, ack=packet_rx.tcp.seq+1,
+            seq=packet_rx.tcp.ack_seq, ack_seq=0,
+            rst=True,
             window=0
         )
+        return
+
+    ack_seq = (packet_rx.tcp.seq
+               + packet_rx.tcp.dlen
+               + packet_rx.tcp.syn
+               + packet_rx.tcp.fin) & 0xFF_FF_FF_FF
+    self.tx_tcp(
+        local_ip=IPAddress(packet_rx.ip.dst), local_port=packet_rx.tcp.dst,
+        remote_ip=IPAddress(packet_rx.ip.src), remote_port=packet_rx.tcp.src,
+        seq=0, ack_seq=ack_seq,
+        rst=True, ack=True,
+        window=0
+    )
 
