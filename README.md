@@ -53,7 +53,7 @@ Educational userspace TCP/IP stack in Python. It is inspired by [PyTCP](https://
 ## Layer 4 — Transport Layer
 
 ### UDP
-- Fully supported
+- supported
 
 ### TCP
 Basic TCP implementation with support for:
