@@ -1410,6 +1410,14 @@ def _rx_time_wait(tcpcb: TCPCB, packet_rx: PacketRX):
         stop_time_wait_timer(tcpcb=tcpcb)
         start_time_wait_timer(tcpcb=tcpcb)
 
+# Pending TX/RX events may still be delivered after an RST aborts the
+# connection and transitions the tcpcb to CLOSED. Discard such stale events.
+def _ignore_closed_tcp_event(
+    tcpcb: TCPCB,
+    packet_rx: PacketRX | None = None,
+) -> None:
+    """Discard stale events for a CLOSED connection."""
+    return
 
 
 # NOTE: rx/tx map indexing depends on STATES class
@@ -1435,7 +1443,8 @@ _rx_map: list[Callable | None] = [
     _rx_close_wait,
     _rx_closing,
     _rx_last_ack,
-    _rx_time_wait
+    _rx_time_wait,
+    _ignore_closed_tcp_event
 ]
 
 _tx_map: list[Callable | None] = [
@@ -1447,7 +1456,9 @@ _tx_map: list[Callable | None] = [
     _tx_fin_wait_2,
     _tx_close_wait,
     _tx_closing,
-    _tx_last_ack
+    _tx_last_ack,
+    None, # padding (no tx for time_wait)
+    _ignore_closed_tcp_event
 ]
 
 def connect(tcpcb: TCPCB):
