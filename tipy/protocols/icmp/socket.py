@@ -75,7 +75,7 @@ class ICMPSocket(Socket):
 
         if __debug__: log(
             "socket",
-            f"{self} connect to {self.remote_ip}:{self.remote_port}",
+            f"{self} connect to {self.remote_ip}",
             level="INFO"
         )
     def send(self, data: bytes):
@@ -83,7 +83,7 @@ class ICMPSocket(Socket):
         if self.remote_ip.ip_address != '0.0.0.0':
             if __debug__: log(
                 "socket",
-                f"{self} connect to {self.remote_ip}:{self.remote_port}",
+                f"{self} connect to {self.remote_ip}",
                 level="INFO"
             )
 
