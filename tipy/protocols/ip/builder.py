@@ -60,28 +60,28 @@ class IPBuilder:
                               ] | None = None
                  ) -> None:
 
-        self.__payload = payload
-        self.__payload_length: int = len(self.__payload)
-        self.__id: int = id
-        self.__offset: int = offset
-        self.__flag_df: bool = flag_df
-        self.__flag_mf: bool = flag_mf
-        self.__ttl: int = ttl
-        self.__protocol: int = protocol
-        self.__options: list[IPOptLSRR
-                              |IPOptNOP
-                              |IPOptEOL
-                              |IPOptUnknown
-                              ] | None = options
+        self._payload = payload
+        self._payload_length: int = len(self._payload)
+        self._id: int = id
+        self._offset: int = offset
+        self._flag_df: bool = flag_df
+        self._flag_mf: bool = flag_mf
+        self._ttl: int = ttl
+        self._protocol: int = protocol
+        self._options: list[IPOptLSRR
+                            | IPOptNOP
+                            | IPOptEOL
+                            | IPOptUnknown
+                            ] | None = options
 
-        self.__version: int = IP_VERSION
-        self.__ihl: int = IP_IHL if not self.__options else sum(len(opt) for opt in self.__options) // 4 \
-                                                       + IP_IHL
-        self.__tos: int = 0
-        self.__total_len: int = (self.__ihl * 4) + self.__payload_length
-        self.__checksum: int = 0
-        self.__src: IPAddress = src
-        self.__dst: IPAddress = dst
+        self._version: int = IP_VERSION
+        self._ihl: int = IP_IHL if not self._options else sum(len(opt) for opt in self._options) // 4 \
+                                                          + IP_IHL
+        self._tos: int = 0
+        self._total_len: int = (self._ihl * 4) + self._payload_length
+        self._checksum: int = 0
+        self._src: IPAddress = src
+        self._dst: IPAddress = dst
 
 
     def psum(self):
@@ -90,11 +90,11 @@ class IPBuilder:
         """
         hdr = struct.pack(
                 '! 4s 4s B B H',
-                self.__src.ip2raw(),
-                self.__dst.ip2raw(),
+                self._src.ip2raw(),
+                self._dst.ip2raw(),
                 0,
-                self.__protocol,
-                self.__total_len - self.__ihl*4
+                self._protocol,
+            self._total_len - self._ihl * 4
             )
 
         return sum(struct.unpack('!3L', hdr))
@@ -106,21 +106,21 @@ class IPBuilder:
             '! B B H H H B B H 4s 4s',
             frame,
             0,
-            self.__version << 4 | self.__ihl,
-            self.__tos,
-            self.__total_len,
-            self.__id,
-            self.__flag_df << 14 | self.__flag_mf << 13 | self.__offset,
-            self.__ttl,
-            self.__protocol,
-            self.__checksum,
-            self.__src.ip2raw(),
-            self.__dst.ip2raw(),
+            self._version << 4 | self._ihl,
+            self._tos,
+            self._total_len,
+            self._id,
+            self._flag_df << 14 | self._flag_mf << 13 | self._offset,
+            self._ttl,
+            self._protocol,
+            self._checksum,
+            self._src.ip2raw(),
+            self._dst.ip2raw(),
         )
 
-        if self.__options:
+        if self._options:
             offset = 20
-            for opt in self.__options:
+            for opt in self._options:
                 opt.build(frame=frame, offset=offset)
                 offset+=len(opt)
 
@@ -132,26 +132,26 @@ class IPBuilder:
             inet_csum(frame)
         )
 
-        self.__payload.build(frame=frame[self.__ihl*4:], psum=self.psum())
+        self._payload.build(frame=frame[self._ihl * 4:], psum=self.psum())
 
 
     def __len__(self):
-        return self.__ihl*4 + len(self.__payload)
+        return self._ihl*4 + len(self._payload)
 
     def __str__(self):
         return (
-            f"{self.__src} > {self.__dst}, proto {self.__protocol} "
-            f"({IP_PROTO.get(self.__protocol, '???')}) "
-            f"id {self.__id},"
-            f"{' DF,' if self.__flag_df else ''}"
-            f" hlen {self.__ihl*4} bytes, "
-            f'plen {self.__total_len - self.__ihl*4} bytes'
-            f', options ({", ".join(f"{opt}(<ly>{len(opt)} bytes</>)" for opt in (self.__options or []))})'
+            f"{self._src} > {self._dst}, proto {self._protocol} "
+            f"({IP_PROTO.get(self._protocol, '???')}) "
+            f"id {self._id},"
+            f"{' DF,' if self._flag_df else ''}"
+            f" hlen {self._ihl * 4} bytes, "
+            f'plen {self._total_len - self._ihl * 4} bytes'
+            f', options ({", ".join(f"{opt}(<ly>{len(opt)} bytes</>)" for opt in (self._options or []))})'
         )
 
     @property
     def tracker(self):
-        return self.__payload.tracker
+        return self._payload.tracker
 
 class IPFragBuilder:
     def __init__(self,
