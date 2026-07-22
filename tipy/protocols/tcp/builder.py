@@ -120,6 +120,7 @@ class TCPBuilder:
             f"{"F," if self._fin else "-,"}"
             f" window {self._window}, seq {self._seq}, ack {self._ack_seq}"
             f"{f", [{self._options}]" if self._options else ""}"
+            f", dlen {len(self._data)}"
         )
 
 
