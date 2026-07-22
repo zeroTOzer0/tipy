@@ -126,9 +126,8 @@ def _send_fin(tcpcb: TCPCB, next_state: STATES|None):
     tcpcb.snd_nxt = (
         (tcpcb.snd_nxt + 1) & 0xFF_FF_FF_FF
     )
-
     tcpcb.snd_max = tcpcb.snd_nxt
-
+    start_rtx_timer(tcpcb=tcpcb)
     _change_state(tcpcb=tcpcb, new=next_state)
 
 def _send_rst(tcpcb: TCPCB):
@@ -182,37 +181,47 @@ def _h_rx_ack(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     if seq_leq(packet_rx.tcp.ack_seq, tcpcb.snd_una) \
     or seq_gt(packet_rx.tcp.ack_seq, tcpcb.snd_nxt):
         if __debug__:
+
+            msg = f"{tcpcb}[{packet_rx.tracker}]: "
+
             if seq_leq(packet_rx.tcp.ack_seq, tcpcb.snd_una):
-                msg = (
-                    f"{tcpcb}: old ACK (ignored), ACK={packet_rx.tcp.ack_seq} "
-                    f"< SND.UNA={tcpcb.snd_una}"
-                )
+                if packet_rx.tcp.ack_seq == tcpcb.snd_una:
+                    msg += f"ack({packet_rx.tcp.ack_seq})=snd_una({tcpcb.snd_una})"
+                else:
+                    msg += f"ack({packet_rx.tcp.ack_seq})---snd_una({tcpcb.snd_una})"
+
                 log(
                     "tcpcb",
-                    msg,
-                    level="DEBUG"
+                    f"{msg} -> old ack, IGNORED",
+                    "DEBUG"
                 )
 
             elif seq_gt(packet_rx.tcp.ack_seq, tcpcb.snd_nxt):
-                msg = (f"{tcpcb}: invalid ACK, ACK={packet_rx.tcp.ack_seq} "
-                       f"> SND.NXT={tcpcb.snd_una}")
+                msg += f"snd_nxt({tcpcb.snd_nxt})---ack({packet_rx.tcp.ack_seq})"
 
-                log("tcpcb", msg, level="WARN")
+                log("tcpcb",
+                    f"{msg} -> invalid ACK",
+                    level="WARN"
+                    )
 
         return 0
 
     old_snd_una = tcpcb.snd_una
     if __debug__:
-        acked_bytes = seq_diff(packet_rx.tcp.ack_seq, old_snd_una)
+        acked_seq = seq_diff(packet_rx.tcp.ack_seq, old_snd_una)
+
+        msg = f"{tcpcb}[{packet_rx.tracker}]: "
+        msg += f"snd_una({old_snd_una})---ack({packet_rx.tcp.ack_seq})"
+
+        if packet_rx.tcp.ack_seq == tcpcb.snd_nxt:
+            msg += f"=snd_nxt({tcpcb.snd_nxt})"
+        else:
+            msg += f"---snd_nxt({tcpcb.snd_nxt})"
 
         log(
             "tcpcb",
-            (
-                f"{tcpcb}: ACK accepted "
-                f"(UNA={old_snd_una} < ACK={packet_rx.tcp.ack_seq} <= SND.NXT={tcpcb.snd_nxt}), "
-                f"acked_bytes={acked_bytes}"
-            ),
-            level="INFO"
+            f"{msg} -> ACK accepted, acked_seq={acked_seq}",
+            "DEBUG"
         )
 
     tcpcb.snd_una = packet_rx.tcp.ack_seq
@@ -236,9 +245,9 @@ def _h_rx_wnd(tcpcb: TCPCB, packet_rx: PacketRX) -> bool:
         if __debug__:
             log(
                 "tcpcb",
-                f"{tcpcb}: SND.WND updated (WL1={tcpcb.snd_wl1}, "
+                f"{tcpcb}[{packet_rx.tracker}]: SND.WND updated (WL1={tcpcb.snd_wl1}, "
                 f"WL2={tcpcb.snd_wl2}, WND={tcpcb.snd_wnd})",
-                level="INFO"
+                level="DEBUG"
             )
         return True
     return False
@@ -258,7 +267,7 @@ def _h_rx_seq_zlen_zwnd(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
 
         log(
             "tcpcb",
-            f"{tcpcb}: zero-len + zero-window "
+            f"{tcpcb}[{packet_rx.tracker}]: zero-len + zero-window "
             f"(SEQ={seq}, RCV.NXT={tcpcb.rcv_nxt}) -> {action}",
             level="DEBUG"
         )
@@ -288,7 +297,7 @@ def _h_rx_seq_zlen(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
 
         log(
             "tcpcb",
-            f"{tcpcb}: zero-length segment "
+            f"{tcpcb}[{packet_rx.tracker}]: zero-length segment "
             f"(SEQ={seq}, RCV.NXT={tcpcb.rcv_nxt}, RCV.MAX={tcpcb.rcv_adv}) "
             f"-> {action}",
             level="DEBUG"
@@ -311,7 +320,7 @@ def _h_rx_seq_zwnd(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
         length = packet_rx.tcp.dlen + packet_rx.tcp.fin + packet_rx.tcp.syn
         log(
             "tcpcb",
-            f"{tcpcb}: zero-window drop "
+            f"{tcpcb}[{packet_rx.tracker}]: zero-window drop "
             f"(SEQ={packet_rx.tcp.seq}, LEN={length}, RCV.NXT={tcpcb.rcv_nxt})",
             level="INFO"
         )
@@ -336,12 +345,12 @@ def _h_rx_seq_normal(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     and seq_geq(last_seq_, tcpcb.rcv_nxt):
 
         if __debug__:
-            msg = ""
+            msg = f"{tcpcb}[{packet_rx.tracker}]: "
             if seq_lt(packet_rx.tcp.seq, tcpcb.rcv_nxt):
-                msg += f"---seq({packet_rx.tcp.seq})---rcv_nxt({tcpcb.rcv_nxt})"
+                msg += f"seq({packet_rx.tcp.seq})---rcv_nxt({tcpcb.rcv_nxt})"
 
             elif packet_rx.tcp.seq == tcpcb.rcv_nxt:
-                msg += f"---seq({packet_rx.tcp.seq})=rcv_nxt({tcpcb.rcv_nxt})"
+                msg += f"seq({packet_rx.tcp.seq})=rcv_nxt({tcpcb.rcv_nxt})"
 
             if seq_gt(last_seq_, tcpcb.rcv_adv):
                 msg += f"---rcv_adv({tcpcb.rcv_adv})---last_seq({last_seq_})"
@@ -361,7 +370,7 @@ def _h_rx_seq_normal(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
         todrop = seq_diff(tcpcb.rcv_nxt, packet_rx.tcp.seq)
 
         packet_rx.tcp.seq = (
-                (packet_rx.tcp.seq + todrop) & 0xFF_FF_FF_FF
+            (packet_rx.tcp.seq + todrop) & 0xFF_FF_FF_FF
         )
 
         packet_rx.tcp.dlen -= (todrop - packet_rx.tcp.fin - packet_rx.tcp.syn)
@@ -382,6 +391,74 @@ def _h_rx_seq_normal(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     if seq_gt(packet_rx.tcp.seq, tcpcb.rcv_nxt) \
     and seq_lt(packet_rx.tcp.seq, tcpcb.rcv_adv):
         return TCP_ACCEPT_BUT_BUFFER
+
+    return TCP_DROP
+
+def _h_rx_seq_check(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
+    """
+    Validate segment sequence acceptability.
+
+    Perform only the TCP receive window check without advancing the
+    RX state. Unlike _h_rx_seq(), this routine never trims payload,
+    updates RCV.NXT, or records received data.
+
+    Used by connection closing states where only segment acceptability
+    needs to be determined.
+    """
+
+    # NOTE:
+    # FreeBSD accepts ACK-only segments in some closing states without
+    # validating SEG.SEQ (validate only when RST exists), while Linux requires the sequence number to be
+    # acceptable. RST processing validates the sequence number.
+
+    if seq_geq(packet_rx.tcp.seq, tcpcb.rcv_nxt) \
+    and seq_lt(packet_rx.tcp.seq, tcpcb.rcv_adv):
+
+        if __debug__:
+            msg = f"{tcpcb}[{packet_rx.tracker}]: "
+
+            if packet_rx.tcp.seq == tcpcb.rcv_nxt:
+                msg += (
+                    f"seq({packet_rx.tcp.seq})"
+                    f"=rcv_nxt({tcpcb.rcv_nxt})"
+                )
+
+            elif seq_gt(packet_rx.tcp.seq, tcpcb.rcv_nxt):
+                msg += (
+                    f"rcv_nxt({tcpcb.rcv_nxt})"
+                    f"---seq({packet_rx.tcp.seq})"
+                )
+
+            msg += f"---rcv_adv({tcpcb.rcv_adv})"
+
+            log(
+                "tcpcb",
+                f"{msg} -> ACCEPT",
+                "DEBUG"
+            )
+
+        return TCP_ACCEPT_AND_HANDLE
+
+    if __debug__:
+        msg = f"{tcpcb}[{packet_rx.tracker}]: "
+
+        if seq_lt(packet_rx.tcp.seq, tcpcb.rcv_nxt):
+            msg += (
+                f"seq({packet_rx.tcp.seq})"
+                f"---rcv_nxt({tcpcb.rcv_nxt})"
+            )
+
+        elif seq_geq(packet_rx.tcp.seq, tcpcb.rcv_adv):
+            msg += (
+                f"rcv_adv({tcpcb.rcv_adv})"
+                f"---seq({packet_rx.tcp.seq})"
+            )
+
+        log(
+            "tcpcb",
+            f"{msg} -> DROP",
+            "DEBUG"
+        )
 
     return TCP_DROP
 
@@ -420,7 +497,7 @@ def _h_rx_rst(tcpcb: TCPCB, packet_rx: PacketRX) -> bool:
     if __debug__:
         log(
             'tcpcb',
-            f'{tcpcb} rcv RST',
+            f'{tcpcb}[{packet_rx.tracker}]: rcv RST',
             level='ERROR'
         )
 
@@ -479,7 +556,7 @@ def _rollback_to_una(tcpcb: TCPCB):
     if __debug__:
         log(
             'tcpcb',
-            f'rollback snd_nxt({tcpcb.snd_nxt}) to snd_una({tcpcb.snd_una}) '
+            f'{tcpcb}: rollback snd_nxt({tcpcb.snd_nxt}) to snd_una({tcpcb.snd_una}) '
             f'({seq_diff(tcpcb.snd_nxt, tcpcb.snd_una)} unacked)',
             'DEBUG'
         )
@@ -925,7 +1002,6 @@ def _tx_syn_recv(tcpcb: TCPCB):
     start_rtx_timer(tcpcb=tcpcb)
 
 
-
 def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
     """
     Handle received segment when the TCP on the ESTAB State
@@ -948,7 +1024,7 @@ def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
 
         with tcpcb.tcpcb_lock:
             tcpcb.snd_r_buf_offset = (
-                (tcpcb.snd_r_buf_offset + seq_acked - packet_rx.tcp.fin) % len(tcpcb.snd_buf)
+                (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
             )
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -1056,20 +1132,18 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
             return
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
-        with tcpcb.tcpcb_lock:
-            tcpcb.snd_r_buf_offset = (
-                (tcpcb.snd_r_buf_offset + seq_acked - packet_rx.tcp.fin) % len(tcpcb.snd_buf)
-            )
-            rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-            rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
 
-        _compute_rcv_wnd(tcpcb=tcpcb,
-                         w_offset=rcv_w_buf_offset,
-                         r_offset=rcv_r_buf_offset)
-
-        # check if all our seq are acked
+        # all outstanding data, including the FIN, has been acknowledged.
         if tcpcb.snd_nxt == tcpcb.snd_una:
             stop_rtx_timer(tcpcb=tcpcb)
+
+            # exclude the FIN since it is not part of the send buffer.
+            with tcpcb.tcpcb_lock:
+                tcpcb.snd_r_buf_offset = (
+                    (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
+                )
+                rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
+                rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
 
             if packet_rx.tcp.fin:
                 _change_state(tcpcb=tcpcb, new=STATES.TIME_WAIT)
@@ -1079,9 +1153,20 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
                 _change_state(tcpcb=tcpcb, new=STATES.FIN_WAIT_2)
 
         else:
-            # our fin not acked yet. check if the rx segment contains FIN
+            # our fin not acked yet. so move by the whole number of acked seq
+            with tcpcb.tcpcb_lock:
+                tcpcb.snd_r_buf_offset = (
+                    (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
+                )
+                rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
+                rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
+
             if packet_rx.tcp.fin:
                 _change_state(tcpcb=tcpcb, new=STATES.CLOSING)
+
+        _compute_rcv_wnd(tcpcb=tcpcb,
+                         w_offset=rcv_w_buf_offset,
+                         r_offset=rcv_r_buf_offset)
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
@@ -1215,8 +1300,7 @@ def _rx_closing(tcpcb: TCPCB, packet_rx: PacketRX):
     # The ACK number remains fixed at the last in-order sequence (rcv.nxt).
     # so do not use _h_rx_seq().
 
-    if seq_leq(packet_rx.tcp.seq, tcpcb.rcv_nxt) \
-    and seq_leq(tcpcb.rcv_nxt, last_seq(packet_rx)):
+    if _h_rx_seq_check(tcpcb=tcpcb, packet_rx=packet_rx) == TCP_ACCEPT_AND_HANDLE:
 
         if (
             _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -1226,16 +1310,22 @@ def _rx_closing(tcpcb: TCPCB, packet_rx: PacketRX):
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
 
-        # check if all our seq are acked (including our FIN)
+        # all outstanding data, including the FIN, has been acknowledged.
         if tcpcb.snd_una == tcpcb.snd_nxt:
             stop_rtx_timer(tcpcb=tcpcb)
             _change_state(tcpcb=tcpcb, new=STATES.TIME_WAIT)
             start_time_wait_timer(tcpcb=tcpcb)
+            # exclude the FIN since it is not part of the send buffer.
+            with tcpcb.tcpcb_lock:
+                tcpcb.snd_r_buf_offset = (
+                    (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
+                )
 
-        with tcpcb.tcpcb_lock:
-            tcpcb.snd_r_buf_offset = (
-                (tcpcb.snd_r_buf_offset + seq_acked - packet_rx.tcp.fin) % len(tcpcb.snd_buf)
-            )
+        else:
+            with tcpcb.tcpcb_lock:
+                tcpcb.snd_r_buf_offset = (
+                    (tcpcb.snd_r_buf_offset + seq_acked ) % len(tcpcb.snd_buf)
+                )
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx )
 
@@ -1288,8 +1378,7 @@ def _rx_close_wait(tcpcb: TCPCB, packet_rx: PacketRX):
     # FIN handling does not alter state progression here.
     # The ACK number remains fixed at the last in-order sequence (rcv.nxt).
     # so do not use _h_rx_seq() here.
-    if seq_leq(packet_rx.tcp.seq, tcpcb.rcv_nxt) \
-    and seq_leq(tcpcb.rcv_nxt, last_seq(packet_rx=packet_rx)):
+    if _h_rx_seq_check(tcpcb=tcpcb, packet_rx=packet_rx) == TCP_ACCEPT_AND_HANDLE:
 
         if (
             _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -1307,7 +1396,7 @@ def _rx_close_wait(tcpcb: TCPCB, packet_rx: PacketRX):
 
         with tcpcb.tcpcb_lock:
             tcpcb.snd_r_buf_offset = (
-                (tcpcb.snd_r_buf_offset + seq_acked - packet_rx.tcp.fin) & 0xFF_FF_FF_FF
+                (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
             )
 
     tcpcb.core.tcp_events_schedule.schedule_event(
@@ -1321,8 +1410,14 @@ def _tx_close_wait(tcpcb: TCPCB):
     """ tx h for close w """
 
     with tcpcb.tcpcb_lock:
-        close_req = tcpcb.close_requested
+        rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
+        rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
         shutdown_req = tcpcb.shutdown_requested
+        close_req = tcpcb.close_requested
+
+    _compute_rcv_wnd(tcpcb=tcpcb,
+                     w_offset=rcv_w_buf_offset,
+                     r_offset=rcv_r_buf_offset)
 
     data = _drain_snd_buf(tcpcb)
 
@@ -1357,22 +1452,29 @@ def _tx_close_wait(tcpcb: TCPCB):
 def _rx_last_ack(tcpcb: TCPCB, packet_rx: PacketRX):
     """ rx h for last ack """
 
-    if seq_leq(packet_rx.tcp.seq, tcpcb.rcv_nxt) \
-    and seq_leq(tcpcb.rcv_nxt, last_seq(packet_rx=packet_rx)):
+    if _h_rx_seq_check(tcpcb=tcpcb, packet_rx=packet_rx) == TCP_ACCEPT_AND_HANDLE:
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
 
-        # check if all our seq (including FIN) are acked
+        # all outstanding data, including the FIN, has been acknowledged.
         if tcpcb.snd_una == tcpcb.snd_nxt:
             stop_rtx_timer(tcpcb=tcpcb)
+            with tcpcb.tcpcb_lock:
+                # exclude the FIN since it is not part of the send buffer.
+                tcpcb.snd_r_buf_offset = (
+                    (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
+                )
             _change_state(tcpcb=tcpcb, new=STATES.CLOSED)
+
+        else:
+            with tcpcb.tcpcb_lock:
+                tcpcb.snd_r_buf_offset = (
+                    (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
+                )
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
-        with tcpcb.tcpcb_lock:
-            tcpcb.snd_r_buf_offset = (
-                (tcpcb.snd_r_buf_offset + seq_acked - packet_rx.tcp.fin) % len(tcpcb.snd_buf)
-            )
+
 
 
 def _tx_last_ack(tcpcb: TCPCB):
