@@ -1,12 +1,13 @@
 from tipy.lib.ip_address import IPAddress, IPFormatError
 from tipy.lib.logger import log
 from tipy.lib import stack
-from tipy.lib.socket_errors import gaierror
-from tipy.lib.socket import (Socket,
-                             AF_INET,
-                             SOCK_RAW,
-                             IP_PROTO_ICMP
-                             )
+from tipy.lib.socket import (
+Socket,
+AF_INET,
+SOCK_RAW,
+IP_PROTO_ICMP,
+gaierror
+)
 
 
 from threading import Semaphore, Condition

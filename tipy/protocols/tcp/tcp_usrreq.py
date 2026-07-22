@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tipy.lib.logger import log
 from tipy.protocols.tcp.tcpcb import TCPCB
-from tipy.lib.socket_errors import gaierror
+from tipy.lib.socket import gaierror
 from tipy.lib.ip_address import IPAddress, IPFormatError
 from tipy.protocols.tcp.tcp import NON_RECEIVABLE_STATES
 from tipy.protocols.tcp.tcp import TCPEvent, TCPEventType

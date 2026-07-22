@@ -4,6 +4,17 @@ from tipy.lib.ip_address import IPAddress
 from tipy.lib.logger import log
 from enum import IntEnum
 
+# EXCEPTIONS:
+class gaierror(Exception): ...
+class SocketError(IntEnum):
+    # TODO: Use these error codes as the errno values for socket exceptions.
+    ECONREFUSED = 1
+    ECONRESET = 2
+    EPIPE = 3
+
+    def __str__(self):
+        return self.name
+
 class AddressFamily(IntEnum):
     AF_INET = 1
     AF_INET6 = 2

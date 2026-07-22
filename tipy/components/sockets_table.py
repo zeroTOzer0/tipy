@@ -1,15 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tipy.protocols.icmp.socket import ICMPSocket
     from tipy.protocols.udp.socket import UDPSocket
     from tipy.protocols.tcp.socket import TCPSocket
     from tipy.protocols.tcp.tcpcb import TCPCB
     from tipy.lib.packet import PacketRX
-    from tipy.lib.socket_errors import (
-        ConnectionRefusedError
-    )
+
 
 from tipy.config.config import EPHEMERAL_PORTS
 

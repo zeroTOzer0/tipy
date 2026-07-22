@@ -1,20 +1,19 @@
 from __future__ import annotations
 
 from tipy.protocols.icmp.icmp import (
-    DESTINATION_UNREACHABLE,
-    PORT_UNREACHABLE,
-    PROTOCOL_UNREACHABLE,
+DESTINATION_UNREACHABLE,
+PORT_UNREACHABLE,
+PROTOCOL_UNREACHABLE,
 
-    ECHO_REQUEST,
-    ECHO_REPLY,
-    ECHO_REQ_REP # Code=0
+ECHO_REQUEST,
+ECHO_REPLY,
+ECHO_REQ_REP # Code=0
 
 )
 
 from tipy.protocols.icmp.parser import ICMPParser
 from tipy.lib.logger import log
 from tipy.lib.ip_address import IPAddress
-from tipy.lib.socket_errors import ConnectionRefusedError
 import struct
 
 from typing import TYPE_CHECKING, Callable
@@ -48,7 +47,8 @@ def _h_icmp_dest_unreach_port(self: Core, packet_rx: PacketRX):
 
         if sock_id in self.udp.sockets:
             self.udp.err_msg[sock_id] = ConnectionRefusedError('[Errno 111] Connection refused')
-            if __debug__: log("icmp", f"port unreachable, socket ID -> {sock_id}")
+            if __debug__:
+                log("icmp", f"port unreachable, socket ID -> {sock_id}")
 
     # TODO: handle TCP also
 

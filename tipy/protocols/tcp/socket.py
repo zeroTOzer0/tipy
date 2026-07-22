@@ -12,6 +12,23 @@ from tipy.protocols.tcp.tcp_usrreq import (
 )
 
 
+def raise_econrefused(so: Socket):
+    raise ConnectionRefusedError("")
+
+def raise_econreset(so: Socket):
+    raise ConnectionResetError("")
+
+def raise_epipe(so: Socket):
+    raise BrokenPipeError("")
+
+so_error = [
+    lambda _ : None,
+    raise_econrefused,
+    raise_econreset,
+    raise_epipe
+
+]
+
 class TCPSocket(Socket):
     def __init__(self, family=AF_INET):
         # sock_opt() is inherited from Socket ABC
@@ -33,6 +50,8 @@ class TCPSocket(Socket):
 
         self.family = family
         self.type = SOCK_STREAM
+
+        self.error: int = 0
 
 
     def bind(self, address: tuple[str, int]):
@@ -100,3 +119,6 @@ class TCPSocket(Socket):
 
     def settimeout(self, t):
         ...
+
+    def raise_error(self):
+        so_error[self.error](self)

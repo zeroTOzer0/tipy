@@ -1,12 +1,13 @@
 from tipy.lib.ip_address import IPAddress, IPFormatError
 from tipy.lib.logger import log
 from tipy.lib import stack
-from tipy.lib.socket_errors import gaierror
 
-from tipy.lib.socket import (Socket,
-                             AF_INET,
-                             SOCK_DGRAM,
-                             )
+from tipy.lib.socket import (
+Socket,
+AF_INET,
+SOCK_DGRAM,
+gaierror
+)
 from threading import Condition
 from collections import deque
 
