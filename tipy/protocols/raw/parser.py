@@ -15,7 +15,7 @@ class RAWParser:
         return self._frame
 
     def __str__(self):
-        return f"RAW data : {len(self._data)}"
+        return f"RAW data : {len(self.data)}"
 
 
 
