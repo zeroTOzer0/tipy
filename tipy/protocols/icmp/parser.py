@@ -58,7 +58,7 @@ class ICMPParser:
         return self._frame[8:]
 
     @cached_property
-    def packet(self) :
+    def data(self) :
         """
         Read the whole packet.
         """

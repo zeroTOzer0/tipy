@@ -1,16 +1,9 @@
-
-
-
-
-
 # --------------------------
 # ICMP TYPES
 DESTINATION_UNREACHABLE = 3
 TIME_EXCEEDED = 11
 ECHO_REQUEST = 8
 ECHO_REPLY = 0
-# --------------------------
-
 # --------------------------
 # ICMP CODES
 # DESTINATION_UNREACHABLE CODES:
@@ -26,11 +19,6 @@ REASSEMBLY_TIME_EXCEEDED = 1
 # ECHO REQUEST / ECHO REPLY CODES
 ECHO_REQ_REP = 0
 # --------------------------
-
-
-
-
-
 # CODES MAPS
 UNREACHABLE_CODES = {
     3 : "PORT_UNREACHABLE",

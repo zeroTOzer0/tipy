@@ -45,7 +45,7 @@ from tipy.protocols.raw.tx import tx_raw
 
 from tipy.components.ip_cache import IPCache
 
-from tipy.components.sockets_table import UDPTable, RAWV4Table, TCPTable
+from tipy.components.sockets_table import UDPTable, RIPTable, TCPTable
 from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
@@ -109,7 +109,7 @@ class Core:
 
         self.udp: UDPTable = UDPTable()
         self.tcp: TCPTable = TCPTable()
-        self.raw_v4: RAWV4Table = RAWV4Table()
+        self.rip: RIPTable = RIPTable()
 
         self.iface: int | None = None
 

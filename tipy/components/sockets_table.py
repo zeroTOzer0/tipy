@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
+
+from tipy.protocols.raw.socket import RIPSocket
+
 if TYPE_CHECKING:
-    from tipy.protocols.icmp.socket import ICMPSocket
     from tipy.protocols.udp.socket import UDPSocket
     from tipy.protocols.tcp.socket import TCPSocket
     from tipy.protocols.tcp.tcpcb import TCPCB
-    from tipy.lib.packet import PacketRX
+    from tipy.lib.errno import Errno
 
 
 from tipy.config.config import EPHEMERAL_PORTS
@@ -15,14 +17,10 @@ class UDPTable:
     def __init__(self):
         # Tuple format: (local_ip, local_port, remote_ip, remote_port)
         self.sockets: dict[tuple, UDPSocket] = dict()
-
         self.bound_sockets: set[tuple[str, int]] = set()
         # when an icmp message received
-        self.err_msg: dict[tuple[str, int, str, int],ConnectionRefusedError
-                                                     | OSError] = dict()
-
+        self.err_msg: dict[tuple[str, int, str, int], Errno] = dict()
         self.ephemeral_ports: set[int] = set(EPHEMERAL_PORTS)
-
         self.used_ports: set[int] = set()
 
     def register_socket(self, sock_id: tuple, socket: UDPSocket):
@@ -61,17 +59,9 @@ class TCPTable:
         # Tuple format: (local_ip, local_port, remote_ip, remote_port)
         self.sockets: dict[tuple, TCPSocket] = dict()
         self.tcpcbs: dict[tuple, TCPCB] = dict()
-
-        # Set of TCP control blocks that are still valid.
-        # Used to ensure events run only on non-destroyed tcpcb objects.
-        self.active_tcpcbs: set[TCPCB] = set()
-
         self.bound_sockets: set[tuple[str, int]] = set()
-
         self.ephemeral_ports: set[int] = set(EPHEMERAL_PORTS)
-
         self.used_ports: set[int] = set()
-
 
     def register_socket(self, sock_id: tuple, socket: TCPSocket):
         self.sockets[sock_id] = socket
@@ -108,23 +98,24 @@ class TCPTable:
         self.active_tcpcbs.remove(tcpcb)
 
 
-class RAWV4Table:
-    """ table for : AF_INET/SOCK_RAW sockets """
-    # NOTE: Current socket identification is wrong for RAW sockets.
+class RIPTable:
+    """ table for : raw_ip (AF_INET/SOCK_RAW sockets) """
     def __init__(self):
-        # Tuple format: (local ip, protocol_number, id|None)
-        self.sockets: dict[tuple[str, int, int | None], ICMPSocket] = dict()
+        # Tuple format: (local ip, protocol_number, remote ip)
+        self.sockets: dict[tuple[str, int, str], RIPSocket] = dict()
 
     def register_socket(self,
-                        sock_id: tuple[str, int, int | None],
-                        socket: ICMPSocket):
+                        sock_id: tuple[str, int, str],
+                        socket: RIPSocket):
         self.sockets[sock_id] = socket
 
     def remove_socket(self,
-                    sock_id: tuple[str, int, int | None]):
+                    sock_id: tuple[str, int, str]):
 
         self.sockets.pop(sock_id, None)
 
-    def remove_socket(self,
-                      sock_id: tuple[str, int, int | None]):
-        self.sockets.pop(sock_id, None)
+    def update_socket(self, old: tuple[str, int, str],
+                      new: tuple[str, int, str],
+                      socket: RIPSocket):
+        self.remove_socket(old)
+        self.register_socket(new, socket)

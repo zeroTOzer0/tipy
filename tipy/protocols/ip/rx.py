@@ -385,6 +385,10 @@ def rx_ip(self: Core, packet_rx: PacketRX):
         )
         if next_layer:
             return next_layer(self, packet_rx)
+
+        #TODO: Before returning ICMP protocol unreachable for unknown protocols,
+        # attempt to resolve the socket using the flow tuple
+        # (local_ip, protocol, remote_ip) and deliver the payload to the raw RX interface.
         return _icmp_proto_unreach(
             self=self,
             packet_rx=packet_rx

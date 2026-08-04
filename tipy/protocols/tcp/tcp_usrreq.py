@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tipy.lib.logger import log
 from tipy.protocols.tcp.tcpcb import TCPCB
-from tipy.lib.socket import gaierror
+from tipy.lib.errno import Errno, GaiError
 from tipy.lib.ip_address import IPAddress, IPFormatError
 from tipy.protocols.tcp.tcp import NON_RECEIVABLE_STATES
 from tipy.protocols.tcp.tcp import TCPEvent, TCPEventType
@@ -17,21 +17,25 @@ if TYPE_CHECKING:
 def tcp_bind(*, self: Core, so: TCPSocket, address: tuple[str, int]):
     try:
         if str(IPAddress(address[0])) != str(self.unicast_ip):
-            raise OSError('[Errno 99] Cannot assign requested address')
+            so.error = Errno.EADDRNOTAVAIL
         so.local_ip = IPAddress(address[0])
     except IPFormatError:
-        raise gaierror('[Errno -2] Name or service not known')
+        so.error = GaiError.EAI_NONAME
+
+    so.raise_exception()
 
     if so.local_port in range(1, 65535):
         # Already bound, cannot bind again this
         # raises an exception when we call bind more than once
-        raise OSError("[Errno 22] Invalid argument")
+        so.error = Errno.EINVAL
+        so.raise_exception()
 
     so.local_port = address[1]
 
     if self.tcp.check_bound((so.local_ip.ip_address,
                                    so.local_port)):
-        raise OSError("[Errno 98] Address already in use")
+        so.error = Errno.EADDRINUSE
+        so.raise_exception()
 
     so.sock_id = (
         so.local_ip.ip_address, so.local_port,
@@ -42,7 +46,12 @@ def tcp_bind(*, self: Core, so: TCPSocket, address: tuple[str, int]):
                                           so.local_port))
 
 def tcp_connect(*, self: Core, so: TCPSocket, address: tuple[str, int]):
-    so.remote_ip = IPAddress(address[0])
+    try:
+        so.remote_ip = IPAddress(address[0])
+    except IPFormatError:
+        so.error = Errno.EADDRNOTAVAIL
+        so.raise_exception()
+
     so.remote_port = address[1]
 
     if not so.local_port:
@@ -74,6 +83,7 @@ def tcp_connect(*, self: Core, so: TCPSocket, address: tuple[str, int]):
                   local_port=so.local_port,
                   remote_ip=so.remote_ip,
                   remote_port=so.remote_port,
+                  so=so,
                   connect_events=so.connect_events,
                   rcv_events=so.rcv_events,
                   send_events=so.send_events,
@@ -91,8 +101,17 @@ def tcp_connect(*, self: Core, so: TCPSocket, address: tuple[str, int]):
         )
         so.connect_events.wait()
 
+    so.raise_exception()
+
 def tcp_send(*, self: Core, so: TCPSocket, data: bytes) -> int:
+
+    so.raise_exception()
+
     tcpcb = self.tcp.tcpcbs.get(so.sock_id, None)
+    if tcpcb is None:
+        so.error = Errno.EPIPE
+        so.raise_exception()
+
     mv = memoryview(data)
     original_len = len(mv)
     dlen = len(mv)
@@ -100,6 +119,7 @@ def tcp_send(*, self: Core, so: TCPSocket, data: bytes) -> int:
     with tcpcb.tcpcb_lock:
         snd_r_buf_offset = tcpcb.snd_r_buf_offset
         snd_w_buf_offset = tcpcb.snd_w_buf_offset
+
 
     if __debug__:
         log(
@@ -137,11 +157,17 @@ def tcp_send(*, self: Core, so: TCPSocket, data: bytes) -> int:
             with tcpcb.send_events:
                 tcpcb.send_events.wait()
 
+            so.raise_exception()
+
     return original_len
 
 
 def tcp_recv(*, self: Core, so: TCPSocket, bufsize: int) -> list[memoryview]:
+    so.raise_exception()
     tcpcb = self.tcp.tcpcbs.get(so.sock_id, None)
+    if tcpcb is None:
+        so.error = Errno.ENOTCONN
+        so.raise_exception()
 
     with tcpcb.tcpcb_lock:
         state = tcpcb.state
@@ -157,6 +183,8 @@ def tcp_recv(*, self: Core, so: TCPSocket, bufsize: int) -> list[memoryview]:
                               ):
         with tcpcb.recv_events:
             tcpcb.recv_events.wait()
+
+    so.raise_exception()
 
     # retake a snapshot, because we may get notified
     # so the rcv states may be modified
@@ -190,6 +218,12 @@ def tcp_recv(*, self: Core, so: TCPSocket, bufsize: int) -> list[memoryview]:
 
 def tcp_close(*, self: Core, so: TCPSocket) -> None:
     tcpcb = self.tcp.tcpcbs.get(so.sock_id, None)
+    # if no tcpcb found, then just remove the socket from the table
+    # otherwise the tcpcb will delete the socket and tcpcb
+    if tcpcb is None:
+        self.tcp.remove_socket(so.sock_id)
+        return
+
     with tcpcb.tcpcb_lock:
         tcpcb.close_requested = True
 
@@ -201,7 +235,12 @@ def tcp_close(*, self: Core, so: TCPSocket) -> None:
     )
 
 def tcp_shutdown(*, self: Core, so: TCPSocket) -> None:
+    # shutdown call acts with how=SHUT_WR behavior. no support yet for SHUT_RD/_RDWR
+    # if tcpcb is not found raise an ENOTCONN
     tcpcb = self.tcp.tcpcbs.get(so.sock_id, None)
+    if tcpcb is None:
+        so.error = Errno.ENOTCONN
+        so.raise_exception()
     with tcpcb.tcpcb_lock:
         tcpcb.shutdown_requested = True
 

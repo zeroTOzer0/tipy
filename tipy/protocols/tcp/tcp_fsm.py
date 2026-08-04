@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from struct import pack
 
+from tipy.lib.errno import Errno
 from tipy.lib.logger import log
 from tipy.protocols.tcp.tcp_seq import (
     seq_lt,
@@ -54,6 +55,18 @@ TCP_DROP              =  3
 # TCPCB will automatically recall the appropriate send routine to send
 # other remaining data.
 TCP_MAX_TX_BYTES = 10000
+
+def _signal_rst(tcpcb: TCPCB):
+    """
+    Notify waiting threads on RST receipt
+    to raise the corresponding exception.
+    """
+    # use only with sync states when the received RST caused an ECONRESET
+    with tcpcb.recv_events:
+        tcpcb.recv_events.notify()
+
+    with tcpcb.send_events:
+        tcpcb.send_events.notify()
 
 
 def _change_state(tcpcb: TCPCB, new: int | None):
@@ -486,7 +499,7 @@ def _h_rx_seq(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     idx |= (2 if tcpcb.rcv_wnd else 0)
     return rcv_seq_map[idx](tcpcb, packet_rx)
 
-def _h_rx_rst(tcpcb: TCPCB, packet_rx: PacketRX) -> bool:
+def _h_rx_rst(tcpcb: TCPCB, packet_rx: PacketRX, errno: Errno) -> bool:
     """
     handle rcv RST. return False if no RST presents
     otherwise go to CLOSED state and delete TCPCB
@@ -500,6 +513,8 @@ def _h_rx_rst(tcpcb: TCPCB, packet_rx: PacketRX) -> bool:
             f'{tcpcb}[{packet_rx.tracker}]: rcv RST',
             level='ERROR'
         )
+
+    tcpcb.so.error = errno
 
     stop_all_timers(tcpcb=tcpcb)
     _change_state(tcpcb=tcpcb, new=STATES.CLOSED)
@@ -581,7 +596,7 @@ def _compute_rcv_wnd(tcpcb: TCPCB, w_offset: int, r_offset: int) -> None:
         tcpcb.rcv_adv = new_rcv_adv
 
 
-def _generate_segment(buf: list[memoryview], n: int) -> memoryview:
+def _generate_segment_payload(buf: list[memoryview], n: int) -> memoryview:
     """
     Consume up to `n` bytes from a buffer list (max length = 2).
     Returns a slice of data while mutating `buf` in-place to reflect
@@ -627,8 +642,8 @@ def _tx_loop(*,
     """
 
     dlen = (
-            len(data[0]) +
-            (len(data[1]) if len(data) == 2 else 0)
+        len(data[0]) +
+        (len(data[1]) if len(data) == 2 else 0)
     )
 
     snd_wnd = tcpcb.snd_wnd
@@ -639,7 +654,7 @@ def _tx_loop(*,
 
     while dlen > 0:
         n = min(tcpcb.remote_mss, snd_wnd, dlen)
-        seg_data = _generate_segment(buf=data, n=n)
+        seg_data = _generate_segment_payload(buf=data, n=n)
         seg_data_len = len(seg_data)
         should_fin = any((shutdown_requested, close_requested)) \
                      and not data
@@ -708,7 +723,6 @@ def _append_rcv_data(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
         rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
         rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
 
-    # if delayed ack was supported, we must recalculate the local window
     _compute_rcv_wnd(tcpcb=tcpcb,
                      w_offset=rcv_w_buf_offset,
                      r_offset=rcv_r_buf_offset)
@@ -807,7 +821,12 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
     """
     Handle received segment when the TCP on the SYN_SENT State
     """
-    if _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx):
+    if packet_rx.tcp.rst\
+    and _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx) > 0:
+        stop_rtx_timer(tcpcb=tcpcb)
+        tcpcb.so.error = Errno.ECONNREFUSED
+        with tcpcb.connect_events:
+            tcpcb.connect_events.notify()
         return
 
     if packet_rx.tcp.fin:
@@ -1013,7 +1032,8 @@ def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
     accept_seg = _h_rx_seq(tcpcb=tcpcb, packet_rx=packet_rx)
 
     if accept_seg == TCP_ACCEPT_AND_HANDLE:
-        if _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx):
+        if _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx, errno=Errno.ECONNRESET):
+            _signal_rst(tcpcb=tcpcb)
             return
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -1126,9 +1146,10 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
     if accept_seg == TCP_ACCEPT_AND_HANDLE:
 
         if (
-            _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx)
+            _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx, errno=Errno.ECONNRESET)
             or _h_active_close_rx(tcpcb=tcpcb, packet_rx=packet_rx)
         ):
+            _signal_rst(tcpcb=tcpcb)
             return
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -1239,9 +1260,10 @@ def _rx_fin_wait_2(tcpcb: TCPCB, packet_rx: PacketRX):
     if accept_seq == TCP_ACCEPT_AND_HANDLE:
 
         if (
-            _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx)
+            _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx, errno=Errno.ECONNRESET)
             or _h_active_close_rx(tcpcb=tcpcb, packet_rx=packet_rx)
         ):
+            _signal_rst(tcpcb=tcpcb)
             return
 
         with tcpcb.tcpcb_lock:
@@ -1303,9 +1325,10 @@ def _rx_closing(tcpcb: TCPCB, packet_rx: PacketRX):
     if _h_rx_seq_check(tcpcb=tcpcb, packet_rx=packet_rx) == TCP_ACCEPT_AND_HANDLE:
 
         if (
-            _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx)
+            _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx, errno=Errno.ECONNRESET)
             or _h_active_close_rx(tcpcb=tcpcb, packet_rx=packet_rx)
         ):
+            _signal_rst(tcpcb=tcpcb)
             return
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -1381,9 +1404,10 @@ def _rx_close_wait(tcpcb: TCPCB, packet_rx: PacketRX):
     if _h_rx_seq_check(tcpcb=tcpcb, packet_rx=packet_rx) == TCP_ACCEPT_AND_HANDLE:
 
         if (
-            _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx)
+            _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx, errno=Errno.ECONNRESET)
             or _h_active_close_rx(tcpcb=tcpcb, packet_rx=packet_rx)
         ):
+            _signal_rst(tcpcb=tcpcb)
             return
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -1453,6 +1477,10 @@ def _rx_last_ack(tcpcb: TCPCB, packet_rx: PacketRX):
     """ rx h for last ack """
 
     if _h_rx_seq_check(tcpcb=tcpcb, packet_rx=packet_rx) == TCP_ACCEPT_AND_HANDLE:
+
+        if _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx, errno=Errno.ECONNRESET):
+            _signal_rst(tcpcb=tcpcb)
+            return
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
 

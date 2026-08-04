@@ -1,6 +1,10 @@
-from tipy.lib.socket import (Socket,
-                             AF_INET,
-                             SOCK_STREAM)
+from tipy.lib.socket import (
+Socket,
+AF_INET,
+SOCK_STREAM
+)
+
+from tipy.lib.errno import so_error
 
 from tipy.lib import stack
 from tipy.lib.ip_address import IPAddress
@@ -11,26 +15,8 @@ from tipy.protocols.tcp.tcp_usrreq import (
     tcp_bind, tcp_connect, tcp_send, tcp_recv, tcp_close, tcp_shutdown
 )
 
-
-def raise_econrefused(so: Socket):
-    raise ConnectionRefusedError("")
-
-def raise_econreset(so: Socket):
-    raise ConnectionResetError("")
-
-def raise_epipe(so: Socket):
-    raise BrokenPipeError("")
-
-so_error = [
-    lambda _ : None,
-    raise_econrefused,
-    raise_econreset,
-    raise_epipe
-
-]
-
 class TCPSocket(Socket):
-    def __init__(self, family=AF_INET):
+    def __init__(self, family: int, type_: int, proto: int):
         # sock_opt() is inherited from Socket ABC
         super().__init__()
         self.local_ip: IPAddress = IPAddress('0.0.0.0')
@@ -50,8 +36,8 @@ class TCPSocket(Socket):
 
         self.family = family
         self.type = SOCK_STREAM
+        self.proto = proto
 
-        self.error: int = 0
 
 
     def bind(self, address: tuple[str, int]):
@@ -120,5 +106,5 @@ class TCPSocket(Socket):
     def settimeout(self, t):
         ...
 
-    def raise_error(self):
+    def raise_exception(self):
         so_error[self.error](self)

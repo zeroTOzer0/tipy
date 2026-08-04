@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from tipy.components.timer import TimerTask
     from tipy.components.core import Core
+    from tipy.lib.socket import Socket
     from threading import Condition
 
 
@@ -49,6 +50,7 @@ class TCPCB:
         "rip",
         "rp",
         "socket_id",
+        "so",
 
         # events
         "connect_events",
@@ -117,6 +119,7 @@ class TCPCB:
                  local_port: int,
                  remote_ip: IPAddress,
                  remote_port: int,
+                 so,
                  connect_events: Condition,
                  rcv_events: Condition,
                  send_events: Condition,
@@ -136,6 +139,7 @@ class TCPCB:
                                   self.lp,
                                   self.rip.ip_address,
                                   self.rp)
+        self.so: Socket = so
 
         self.sock_opt: dict[tuple, Any] = sock_opt
 

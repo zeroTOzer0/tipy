@@ -8,5 +8,5 @@ if TYPE_CHECKING:
     from tipy.components.core import Core
 
 
-def rx_raw(packet_handler: Core, packet_rx: PacketRX):
+def rx_raw(self: Core, packet_rx: PacketRX):
     RAWParser(packet_rx)

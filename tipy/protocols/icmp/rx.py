@@ -11,6 +11,8 @@ ECHO_REQ_REP # Code=0
 
 )
 
+from tipy.lib.errno import Errno
+
 from tipy.protocols.icmp.parser import ICMPParser
 from tipy.lib.logger import log
 from tipy.lib.ip_address import IPAddress
@@ -46,7 +48,7 @@ def _h_icmp_dest_unreach_port(self: Core, packet_rx: PacketRX):
     if protocol == IP_PROTO_UDP:
 
         if sock_id in self.udp.sockets:
-            self.udp.err_msg[sock_id] = ConnectionRefusedError('[Errno 111] Connection refused')
+            self.udp.err_msg[sock_id] = Errno.ECONNREFUSED
             if __debug__:
                 log("icmp", f"port unreachable, socket ID -> {sock_id}")
 
@@ -80,7 +82,7 @@ def _h_icmp_dest_unreach_proto(self: Core, packet_rx: PacketRX):
     if protocol == IP_PROTO_UDP:
 
         if sock_id in self.udp.sockets:
-            self.udp.err_msg[sock_id] = OSError('[Errno 92] Protocol not available')
+            self.udp.err_msg[sock_id] = Errno.ENOPROTOOPT
             if __debug__: log("icmp", f"protocol unreachable, socket ID -> {sock_id}")
 
     # TODO: handle TCP also
@@ -126,14 +128,15 @@ def _h_icmp_echo_rep(self: Core, packet_rx: PacketRX):
             level="INFO"
         )
 
-    in_raw_sock_id = (
+    rip_sock_id = (
         packet_rx.ip.dst,
         packet_rx.ip.protocol,
-        None
+        packet_rx.ip.src
     )
-    if in_raw_sock_id in self.raw_v4.sockets:
-        self.raw_v4.sockets[in_raw_sock_id]\
-        .get_data(packet_rx.icmp.packet)
+    if rip_sock_id in self.rip.sockets:
+        self.rip.sockets[rip_sock_id].get_data(packet_rx.icmp.data)
+
+    #TODO: try the sock_id with zeros as the last item in the tuple
 
 
 

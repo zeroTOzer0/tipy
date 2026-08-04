@@ -4,17 +4,6 @@ from tipy.lib.ip_address import IPAddress
 from tipy.lib.logger import log
 from enum import IntEnum
 
-# EXCEPTIONS:
-class gaierror(Exception): ...
-class SocketError(IntEnum):
-    # TODO: Use these error codes as the errno values for socket exceptions.
-    ECONREFUSED = 1
-    ECONRESET = 2
-    EPIPE = 3
-
-    def __str__(self):
-        return self.name
-
 class AddressFamily(IntEnum):
     AF_INET = 1
     AF_INET6 = 2
@@ -31,10 +20,11 @@ class SocketType(IntEnum):
         return self.name
 
 class Protocol(IntEnum):
-    IP_PROTO_IP = 0
-    IP_PROTO_ICMP = 1
-    IP_PROTO_TCP = 6
-    IP_PROTO_UDP = 17
+    IPPROTO_IP = 0
+    IPPROTO_ICMP = 1
+    IPPROTO_TCP = 6
+    IPPROTO_UDP = 17
+
     def __str__(self):
         return self.name
 
@@ -42,18 +32,16 @@ class OptionLevel(IntEnum):
     """
     use it with 'setsockopt' call
     """
-
-    IPPROTO_IP = 1
-    SOL_SOCKET = 2
+    IPPROTO_IP = 0
+    SOL_SOCKET = 1
 
     def __str__(self):
         return self.name
 
 class OptionName(IntEnum):
-    IPPROTO_TTL = 1
-    IPPROTO_OPTIONS = 2
-
-    SO_LINGER = 3
+    IPPROTO_TTL = 0
+    IPPROTO_OPTIONS = 1
+    SO_LINGER = 2
 
     def __str__(self):
         return self.name
@@ -67,13 +55,14 @@ SOCK_DGRAM = SocketType.SOCK_DGRAM
 SOCK_RAW = SocketType.SOCK_RAW
 
 # Protocol Numbers
-IP_PROTO_IP = Protocol.IP_PROTO_IP
-IP_PROTO_ICMP = Protocol.IP_PROTO_ICMP
-IP_PROTO_TCP = Protocol.IP_PROTO_TCP
-IP_PROTO_UDP = Protocol.IP_PROTO_UDP
+IPPROTO_IP = Protocol.IPPROTO_IP
+IPPROTO_ICMP = Protocol.IPPROTO_ICMP
+IPPROTO_TCP = Protocol.IPPROTO_TCP
+IPPROTO_UDP = Protocol.IPPROTO_UDP
 
 # Socket Options Level
-IPPROTO_IP = OptionLevel.IPPROTO_IP
+# NOTE: IPPROTO_IP level is defined above at protocole number
+# in : IPPROTO_IP = OptionLevel.IPPROTO_IP
 SOL_SOCKET = OptionLevel.SOL_SOCKET
 
 # Socket Option Name
@@ -87,16 +76,16 @@ class Socket(ABC):
         self.remote_ip: IPAddress
         self.local_port: int
         self.remote_port: int
-        self.__family: AddressFamily
-        self.__type: SocketType
+
+        self.family: AddressFamily
+        self.type: SocketType
 
         self.sock_opt: dict[tuple[OptionLevel, OptionName], int | bytes] = dict()
 
+        self.error: int = 0
+
     def __str__(self):
         return f'{self.family}/{self.type}'
-
-
-
 
     @abstractmethod
     def bind(self, address: tuple[str, int]):
@@ -141,21 +130,25 @@ class Socket(ABC):
                 'INFO'
             )
 
-
-
-
-def socket(family: AddressFamily, type: SocketType, protocol: Protocol=0) -> Socket | None:
+def socket(family: AddressFamily, type_: SocketType, protocol: Protocol=0) -> Socket | None:
     from tipy.protocols.udp.socket import UDPSocket
-    from tipy.protocols.icmp.socket import ICMPSocket
     from tipy.protocols.tcp.socket import TCPSocket
-    if type == SOCK_DGRAM:
-        return UDPSocket()
+    from tipy.protocols.raw.socket import RIPSocket
+    if family == AF_INET:
+        if type_ == SOCK_DGRAM:
+            return UDPSocket(
+                family=family, type_=type_, proto=protocol
+            )
 
-    if type == SOCK_STREAM:
-        return TCPSocket()
+        if type_ == SOCK_STREAM:
+            return TCPSocket(
+                family=family, type_=type_, proto=protocol
+            )
 
-    if type == SOCK_RAW and protocol == IP_PROTO_ICMP:
-        return ICMPSocket()
+        if type_ == SOCK_RAW:
+            return RIPSocket(
+                family=AF_INET, type_=type_, proto=protocol
+            )
 
     return None
 
