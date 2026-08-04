@@ -94,8 +94,6 @@ class TCPTable:
 
     def remove_tcpcb(self, sock_id: tuple, tcpcb: TCPCB):
         self.tcpcbs.pop(sock_id, None)
-        self.active_tcpcbs.remove(tcpcb)
-
 
 class RIPTable:
     """ table for : raw_ip (AF_INET/SOCK_RAW sockets) """
