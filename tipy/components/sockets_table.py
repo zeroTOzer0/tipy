@@ -91,7 +91,6 @@ class TCPTable:
 
     def register_tcpcb(self, sock_id: tuple, tcpcb: TCPCB):
         self.tcpcbs[sock_id] = tcpcb
-        self.active_tcpcbs.add(tcpcb)
 
     def remove_tcpcb(self, sock_id: tuple, tcpcb: TCPCB):
         self.tcpcbs.pop(sock_id, None)
