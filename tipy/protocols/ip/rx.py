@@ -386,14 +386,14 @@ def rx_ip(self: Core, packet_rx: PacketRX):
         if next_layer:
             return next_layer(self, packet_rx)
 
-        #TODO: Before returning ICMP protocol unreachable for unknown protocols,
-        # attempt to resolve the socket using the flow tuple
-        # (local_ip, protocol, remote_ip) and deliver the payload to the raw RX interface.
-        return _icmp_proto_unreach(
-            self=self,
-            packet_rx=packet_rx
-        )
+        rip_sock = self.rip.sockets.get((packet_rx.ip.dst, packet_rx.ip.protocol, packet_rx.ip.src), None)
+        if rip_sock is None:
+            return _icmp_proto_unreach(
+                self=self,
+                packet_rx=packet_rx
+            )
 
+        rip_sock.get_data(packet=packet_rx.ip.data)
 
     if reassembled_ip_dgram := _ip_reass(self, packet_rx):
         packet_rx = PacketRX(reassembled_ip_dgram)
@@ -413,10 +413,16 @@ def rx_ip(self: Core, packet_rx: PacketRX):
         )
         if next_layer:
             return next_layer(self, packet_rx)
-        return _icmp_proto_unreach(
-            self=self,
-            packet_rx=packet_rx
-        )
+
+        rip_sock = self.rip.sockets.get((packet_rx.ip.dst, packet_rx.ip.protocol, packet_rx.ip.src), None)
+        if rip_sock is None:
+            return _icmp_proto_unreach(
+                self=self,
+                packet_rx=packet_rx
+            )
+
+        rip_sock.get_data(packet=packet_rx.ip.data)
+
     return None
 
 
