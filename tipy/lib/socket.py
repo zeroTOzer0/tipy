@@ -130,7 +130,7 @@ class Socket(ABC):
                 'INFO'
             )
 
-def socket(family: AddressFamily, type_: SocketType, protocol: Protocol=0) -> Socket | None:
+def socket(family: AddressFamily, type_: SocketType, protocol: int=0) -> Socket | None:
     from tipy.protocols.udp.socket import UDPSocket
     from tipy.protocols.tcp.socket import TCPSocket
     from tipy.protocols.raw.socket import RIPSocket
