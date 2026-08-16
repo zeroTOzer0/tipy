@@ -94,7 +94,7 @@ def tx_ip(self: Core,
         mac_address = self.arp_cache.find_entry(dst.ip_address)
         if __debug__: log(
             'ip',
-            f'found route to {dst} inside our network'
+            f'found route to {dst} inside our network '
             f'{self.network}',
             level='INFO'
         )
