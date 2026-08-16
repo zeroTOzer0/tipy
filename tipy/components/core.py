@@ -103,13 +103,13 @@ class Core:
 
         self.tx_ring: Optional[TXRing] = None
         self.rx_ring: Optional[RXRing] = None
-        self.arp_cache: Optional[ARPCache] = None
         self.timer: Optional[Timer] = None
         self.tcp_events_schedule: Optional[TCPEvents] = None
 
         self.udp: UDPTable = UDPTable()
         self.tcp: TCPTable = TCPTable()
         self.rip: RIPTable = RIPTable()
+        self.arp_cache: ARPCache = ARPCache(core=self)
 
         self.iface: int | None = None
 
@@ -139,10 +139,8 @@ class Core:
             )
         self.tx_ring = TXRing(core=self)
         self.rx_ring = RXRing(core=self)
-        self.arp_cache = ARPCache(core=self)
         self.timer = Timer(core=self)
         self.tcp_events_schedule = TCPEvents(core=self)
-
         self.rx_ring.iface = self.iface
         self.tx_ring.iface = self.iface
 
@@ -160,7 +158,6 @@ class Core:
         self.tx_ring.start()
         self.rx_ring.start()
         self.timer.start()
-        self.arp_cache.start()
         self.tcp_events_schedule.start()
 
         self._acquire_ipaddr(IP_ADDRESS)
@@ -170,7 +167,6 @@ class Core:
         self.tx_ring.shutdown()
         self.rx_ring.shutdown()
         self.timer.shutdown()
-        self.arp_cache.shutdown()
         self.tcp_events_schedule.shutdown()
 
     def _send_arp_prob(self, ipaddr):

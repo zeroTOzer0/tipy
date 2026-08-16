@@ -41,43 +41,6 @@ class ARPCache:
 
         self.core = core
 
-
-    def start(self):
-        Thread(target=self._arp_cache_loop).start()
-
-    def shutdown(self):
-        self._stop_thread = True
-        with self._cond:
-            self._cond.notify_all()
-        if __debug__:
-            log("stack", "ARP cache shutdown", level="INFO")
-
-
-    def _arp_cache_loop(self):
-        if __debug__:
-            log("stack", "ARP cache started", level="INFO")
-        while not self._stop_thread:
-            with self._cond:
-                if self._arp_cache:
-                    now = time.monotonic()
-                    # must change to list
-                    # to avoid RuntimeError: dictionary changed size during iteration
-                    for _ in list(self._arp_cache):
-                        if self._arp_cache[_].flush_after <= now:
-                            self._flush_entry(_)
-
-                if self._arp_cache:
-                    smallest_ttl = min(
-                        self._arp_cache[_].flush_after \
-                        for _ in self._arp_cache
-                    )
-                    timeout = max(0, smallest_ttl - time.monotonic())
-                    self._cond.wait(timeout=timeout)
-
-                elif not self._arp_cache:
-                    self._cond.wait()
-
-
     def _flush_entry(self, ip_address: str):
         if __debug__:
             entry = self._arp_cache.get(ip_address)
