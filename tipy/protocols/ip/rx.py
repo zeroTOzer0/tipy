@@ -71,8 +71,8 @@ def _reass_timer_exceeded(self: Core, packet_rx: PacketRX, buffer_id):
     """
     free resources when timer is exceeded, and send out an icmp report
     """
-    with self.ip_fragment_cache_rlock:
-        if self.ip_fragment_cache.pop(buffer_id, None):
+    with self.ip_cache.fragments_cache_rlock:
+        if self.ip_cache.fragments_cache.pop(buffer_id, None):
             if __debug__:
                 log(
                     "ip-reass",
@@ -90,8 +90,8 @@ def _dealloc_ip_reass_mem(self: Core, buffer_id):
     """
     deallocate memory resources when reassembly done successfully
     """
-    with self.ip_fragment_cache_rlock:
-        if self.ip_fragment_cache.pop(buffer_id, None):
+    with self.ip_cache.fragments_cache_rlock:
+        if self.ip_cache.fragments_cache.pop(buffer_id, None):
             if __debug__:
                 log(
                     "ip-reass",
@@ -101,8 +101,7 @@ def _dealloc_ip_reass_mem(self: Core, buffer_id):
 
 def _ip_reass_timer(self: Core,
                     packet_rx: PacketRX,
-                    reass_mem: dict,
-                    buffer_id: tuple):
+                    buffer_id: tuple[str, str, int, int]):
     """
     start new timer for the reassembly session
     used also to extend the timer delay by deleting
@@ -116,7 +115,7 @@ def _ip_reass_timer(self: Core,
         ),
         timer_name='ip-reass'
     )
-    self.ip_fragment_cache[buffer_id]['timer'] = t
+    self.ip_cache.fragments_cache[buffer_id]['timer'] = t
     if __debug__:
         log(
             "ip-reass",
@@ -126,13 +125,13 @@ def _ip_reass_timer(self: Core,
 
 def _alloc_ip_reass_mem(self: Core,
                         packet_rx: PacketRX,
-                        buffer_id: tuple):
+                        buffer_id: tuple[str, str, int, int]):
     """
     allocate ip reassembly memory resources
     """
-    with self.ip_fragment_cache_rlock:
-        if buffer_id not in self.ip_fragment_cache:
-            self.ip_fragment_cache[buffer_id] = {
+    with self.ip_cache.fragments_cache_rlock:
+        if buffer_id not in self.ip_cache.fragments_cache:
+            self.ip_cache.fragments_cache[buffer_id] = {
                 'data_buffer' : bytearray(),
                 'header_buffer' : bytearray(),
                 'block_count' : 0,
@@ -144,7 +143,6 @@ def _alloc_ip_reass_mem(self: Core,
             _ip_reass_timer(
                 self=self,
                 packet_rx=packet_rx,
-                reass_mem=self.ip_fragment_cache,
                 buffer_id=buffer_id
             )
 
@@ -162,7 +160,7 @@ def _is_reassembled(last: bool, block_count: int, total_data_len: int):
 def _ip_reass(self: Core,
               packet_rx: PacketRX):
 
-    buffer_id: tuple = (packet_rx.ip.src,
+    buffer_id: tuple[str, str, int, int] = (packet_rx.ip.src,
                         packet_rx.ip.dst,
                         packet_rx.ip.id,
                         packet_rx.ip.protocol
@@ -176,9 +174,9 @@ def _ip_reass(self: Core,
     total_len = packet_rx.ip.total_len
     ihl = packet_rx.ip.ihl
 
-    with self.ip_fragment_cache_rlock:
+    with self.ip_cache.fragments_cache_rlock:
 
-        reass_resources = self.ip_fragment_cache[buffer_id]
+        reass_resources = self.ip_cache.fragments_cache[buffer_id]
 
 
         if not flag_mf: # The last Fragment
@@ -251,7 +249,6 @@ def _ip_reass(self: Core,
             _ip_reass_timer(
                 self=self,
                 packet_rx=packet_rx,
-                reass_mem=self.ip_fragment_cache,
                 buffer_id=buffer_id
             )
 
@@ -305,7 +302,6 @@ def _ip_reass(self: Core,
             _ip_reass_timer(
                 self=self,
                 packet_rx=packet_rx,
-                reass_mem=self.ip_fragment_cache,
                 buffer_id=buffer_id
             )
 
@@ -326,7 +322,6 @@ def _ip_reass(self: Core,
             _ip_reass_timer(
                 self=self,
                 packet_rx=packet_rx,
-                reass_mem=self.ip_fragment_cache,
                 buffer_id=buffer_id
             )
 

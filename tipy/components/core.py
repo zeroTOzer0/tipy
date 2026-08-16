@@ -93,12 +93,6 @@ class Core:
 
     tx_raw = tx_raw
 
-    ip_cache = IPCache()
-    ip_fragment_cache = ip_cache.fragments_cache
-    ip_fragment_cache_rlock = ip_cache.fragments_cache_rlock
-
-
-
     def __init__(self):
 
         self.tx_ring: Optional[TXRing] = None
@@ -109,7 +103,9 @@ class Core:
         self.udp: UDPTable = UDPTable()
         self.tcp: TCPTable = TCPTable()
         self.rip: RIPTable = RIPTable()
+
         self.arp_cache: ARPCache = ARPCache(core=self)
+        self.ip_cache: IPCache = IPCache()
 
         self.iface: int | None = None
 
