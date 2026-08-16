@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from tipy.config.config import MAC_ADDRESS , IP_ADDRESS
+from tipy.config.config import MAC_ADDRESS , IP_ADDRESS, ARP_CACHE_TTL
 from tipy.lib.logger import log
 
 from tipy.protocols.arp.parser import ARPParser
@@ -35,6 +35,14 @@ def rx_arp(self: Core, packet_rx: PacketRX):
                 self.arp_cache.update_arp_cache(
                     packet_rx.arp.spa.raw2ip(),
                     packet_rx.arp.sha.raw2mac()
+                )
+
+                # Schedule automatic ARP cache entry removal after TTL expires.
+                self.timer.schedule_timer(
+                    expire_after=ARP_CACHE_TTL,
+                    remove_at_execute=True,
+                    call=lambda : self.arp_cache.flush_entry(ip_address=packet_rx.arp.spa.raw2ip()),
+                    timer_name="arp flush"
                 )
 
                 self.ip_cache.dequeue(

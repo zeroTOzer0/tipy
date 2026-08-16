@@ -41,7 +41,7 @@ class ARPCache:
 
         self.core = core
 
-    def _flush_entry(self, ip_address: str):
+    def flush_entry(self, ip_address: str):
         if __debug__:
             entry = self._arp_cache.get(ip_address)
 
