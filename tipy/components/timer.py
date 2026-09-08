@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from time import monotonic
+from time import monotonic_ns
 from heapq import heappush, heappop
 from threading import Thread, Condition
 
@@ -12,38 +12,42 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tipy.components.core import Core
 
+# General-purpose Timer Module using a 1ms clock granularity.
+
+# Timer tasks are removed lazily: a task is marked as deleted instead
+# of being removed from the heap. The timer loop later pops the task
+# and ignores it if it has been marked as deleted.
 
 class TimerTask:
     def __init__(self,
                  *,
-                 expire_after,
+                 expire_after_sec: int | float,
                  remove_at_execute: bool,
                  call: Callable,
                  name: str =''
                  ):
 
-        self._expire_after = expire_after
-        self._start_time = monotonic()
+        self._expire_after_sec = expire_after_sec
+        self._start_time_ms = monotonic_ns() // 1_000_000
         self._call: Callable = call
         self._deleted = False
         self.name = name
 
-        self.remove_at_execute = remove_at_execute
-        self.retry_counter: int = 0
+        self.remove_at_execute = remove_at_execute # not yet used
+        self.retry_counter: int = 0 # not yet used
 
-    def execute_at(self):
-        return self._start_time + self._expire_after
+    def execute_at_ms(self):
+        return self._start_time_ms + self._expire_after_sec * 1000
 
     def execute(self):
         if not self._deleted:
             self._call()
-
-        if __debug__:
-            log(
-                "timer",
-                f"timer fired: {self.name or 'unnamed'}",
-                level="DEBUG"
-            )
+            if __debug__:
+                log(
+                    "timer",
+                    f"timer fired: {self.name or 'unnamed'}",
+                    level="DEBUG"
+                )
 
     def remove(self):
         """
@@ -54,7 +58,7 @@ class TimerTask:
 
 class Timer:
     def __init__(self, core: Core | None = None):
-        self._tasks: list[tuple[float, TimerTask]] = []
+        self._tasks: list[tuple[int, TimerTask]] = []
         self._stop_thread: bool = False
         self._cond: Condition = Condition()
 
@@ -89,9 +93,7 @@ class Timer:
                     self._cond.wait()
                     continue
 
-                now = monotonic()
-
-                while self._tasks and self._tasks[0][0] <= now:
+                while self._tasks and self._tasks[0][0] <= monotonic_ns() // 1_000_000:
                     task = heappop(self._tasks)
                     ready_tasks.append(task[1])
 
@@ -100,7 +102,8 @@ class Timer:
 
             with self._cond:
                 if self._tasks:
-                    timeout = max(0, self._tasks[0][0] - now)
+                    remaining_ms = self._tasks[0][0] - monotonic_ns() // 1_000_000
+                    timeout = max(0, remaining_ms) / 1000
                 else:
                     timeout = None
 
@@ -112,7 +115,7 @@ class Timer:
                        timer_name: str = ''):
 
         task = TimerTask(
-            expire_after=expire_after,
+            expire_after_sec=expire_after,
             remove_at_execute=remove_at_execute,
             call=call,
             name=timer_name
@@ -121,7 +124,7 @@ class Timer:
         with self._cond:
             heappush(
                 self._tasks,
-                (task.execute_at(), task)
+                (task.execute_at_ms(), task)
             )
             if __debug__:
                 log(
