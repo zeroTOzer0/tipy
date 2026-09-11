@@ -1,25 +1,27 @@
 TODO / Missing Features
 
-Ethernet II:
-- Multicast handling
+- Ethernet II:
+    - Multicast handling
 
-ARP:
-- ARP request retry
-- ARP Announcement
+- ARP:
+    - ARP request retry
+    - ARP Announcement
 
-IP:
-- Multicast / broadcast handling
+- IP:
+    - Multicast / broadcast handling
 
-ICMP:
-- Handle ICMP Type 3 (Destination Unreachable), Code 3 (Port Unreachable) for TCP
-- Support other ICMP messages
+- ICMP:
+    - Handle ICMP Type 3 (Destination Unreachable), Code 3 (Port Unreachable) for TCP
+    - Support other ICMP messages
 
-UDP:
-- Multicast / broadcast handling
+- UDP:
+    - Multicast / broadcast handling
 
-TCP:
-- Implement RTO
-- Implement congestion control (CC)
-- Implement out-of-order (OOO) handling
+- TCP:
+    - Implement RTO
+    - Implement congestion control (CC)
+    - Implement out-of-order (OOO) handling
+
+- Tests
 
 This is what comes to mind for now. More features may be added as new requirements arise.
