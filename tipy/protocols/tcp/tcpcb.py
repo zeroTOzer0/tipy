@@ -102,6 +102,12 @@ class TCPCB:
         "rtx_timer",
         "time_wait_timer",
 
+        # rto vars
+        "rto",
+        "rtt",
+        "srtt",
+        "rttvar",
+
         # application requests
         "close_requested",
         "shutdown_requested",
@@ -201,13 +207,20 @@ class TCPCB:
         self.rtx_timer: TimerTask | None = None
         self.time_wait_timer: TimerTask | None = None
 
+        # tcp rto vars
+        # Set initial RTO to 1.0 second until the first RTT measurement is made.
+        # [RFC 6298 (2.1)]
+        self.rto: float = 1.0
+        self.rtt: float | None = None
+        self.srtt: float | None = None
+        self.rttvar: float | None = None
+
         # Application requested connection close/shutdown.
         self.close_requested: bool = False
         self.shutdown_requested: bool = False
 
         self.state = STATES.CLOSED
         self.prev_state = self.state
-
 
     def __str__(self):
         return f"({self.lip}:{self.lp}, {self.rip}:{self.rp})"

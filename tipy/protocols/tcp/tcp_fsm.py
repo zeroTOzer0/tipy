@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import monotonic_ns
 from struct import pack
 
 from tipy.lib.errno import Errno
@@ -17,17 +18,21 @@ from tipy.protocols.tcp.tcpcb import remove_tcpcb
 from tipy.lib.socket import SOL_SOCKET, SO_LINGER
 from tipy.protocols.tcp.builder import TCPOptMSS
 from tipy.protocols.tcp.tcp_timer import (
-start_rtx_timer,
-start_time_wait_timer,
-stop_rtx_timer,
-stop_time_wait_timer,
-stop_all_timers
+    start_rtx_timer,
+    restart_rtx_timer,
+    start_time_wait_timer,
+    stop_rtx_timer,
+    stop_time_wait_timer,
+    stop_all_timers,
+    set_initial_rto,
+    set_new_rto,
+    back_off_rto
 )
 from tipy.protocols.tcp.tcp import (
-STATES,
-TCP_MSS_KIND,
-TCPEvent,
-TCPEventType
+    STATES,
+    TCP_MSS_KIND,
+    TCPEvent,
+    TCPEventType
 )
 
 from typing import Callable, TYPE_CHECKING
@@ -68,7 +73,6 @@ def _signal_rst(tcpcb: TCPCB):
     with tcpcb.send_events:
         tcpcb.send_events.notify()
 
-
 def _change_state(tcpcb: TCPCB, new: int | None):
     if new is None:
         return
@@ -82,6 +86,25 @@ def _change_state(tcpcb: TCPCB, new: int | None):
                 f"{tcpcb}: state changed {tcpcb.prev_state} -> {tcpcb.state}",
                 level="INFO"
             )
+
+def _rtt_probe(tcpcb: TCPCB):
+    """
+    Start an RTT measurement.
+    used only in TX path
+    """
+    # NOTE: Do not probe a retransmitted segment. [Karn's algorithme]
+    if tcpcb.rtt is None:
+        tcpcb.rtt = monotonic_ns() / 1_000_000_000
+
+def _rtt_sample(tcpcb: TCPCB):
+    """
+    Calculate the RTT sample after an RTT probe.
+    then recalculate the RTO.
+    Used only in RX path.
+    """
+    if tcpcb.rtt is not None:
+        tcpcb.rtt = (monotonic_ns() / 1_000_000_000) - tcpcb.rtt
+        set_new_rto(tcpcb=tcpcb)
 
 def _send_ack(tcpcb: TCPCB):
     """
@@ -128,6 +151,9 @@ def _send_fin(tcpcb: TCPCB, next_state: STATES|None):
 
     tcpcb.sent_fin = True
 
+    # do an RTT probe
+    _rtt_probe(tcpcb=tcpcb)
+
     tcpcb.core.tx_tcp(
         local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
         local_port=tcpcb.lp, remote_port=tcpcb.rp,
@@ -135,6 +161,7 @@ def _send_fin(tcpcb: TCPCB, next_state: STATES|None):
         ack=True, fin=True,
         window=tcpcb.rcv_wnd,
     )
+
 
     tcpcb.snd_nxt = (
         (tcpcb.snd_nxt + 1) & 0xFF_FF_FF_FF
@@ -389,8 +416,11 @@ def _h_rx_seq_normal(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
         packet_rx.tcp.dlen -= (todrop - packet_rx.tcp.fin - packet_rx.tcp.syn)
 
         tcpcb.tcp_data_start = todrop
-        tcpcb.tcp_data_len = min(seq_diff(tcpcb.rcv_adv, tcpcb.rcv_nxt),
-                                 seq_diff(last_seq_ + 1, tcpcb.rcv_nxt))
+
+        tcpcb.tcp_data_len = min(
+            (seq_diff(tcpcb.rcv_adv, tcpcb.rcv_nxt) - 1) & 0xFF_FF_FF_FF,
+            seq_diff(last_seq_ + 1, tcpcb.rcv_nxt)
+        )
 
         tcpcb.rcv_nxt = (tcpcb.rcv_nxt + tcpcb.tcp_data_len) & 0xFF_FF_FF_FF
 
@@ -669,9 +699,13 @@ def _tx_loop(*,
         )
 
         tcpcb.snd_nxt = (tcpcb.snd_nxt + seg_data_len + should_fin) & 0xFF_FF_FF_FF
+
         # check if this is not a retransmission
         if seq_gt(tcpcb.snd_nxt, tcpcb.snd_max):
             tcpcb.snd_max = tcpcb.snd_nxt
+
+            # do an RTT prob
+            _rtt_probe(tcpcb=tcpcb)
 
         dlen -= seg_data_len
         snd_wnd -= seg_data_len
@@ -708,7 +742,6 @@ def _tx_loop(*,
             break
 
     start_rtx_timer(tcpcb=tcpcb)
-
 
 def _append_rcv_data(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     """
@@ -765,7 +798,6 @@ def _append_rcv_data(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
 
     return 0
 
-
 def _drain_snd_buf(tcpcb: TCPCB) -> list[memoryview]:
     with tcpcb.tcpcb_lock:
         snd_w_buf_offset = tcpcb.snd_w_buf_offset
@@ -777,7 +809,6 @@ def _drain_snd_buf(tcpcb: TCPCB) -> list[memoryview]:
         n=tcpcb.snd_wnd
     )
 
-
 def _init_snd_seq(tcpcb: TCPCB):
     tcpcb.snd_una = tcpcb.iss
     tcpcb.snd_nxt = tcpcb.iss
@@ -787,16 +818,12 @@ def _init_snd_wnd(tcpcb: TCPCB, packet_rx: PacketRX):
     tcpcb.snd_wnd = packet_rx.tcp.window
     tcpcb.snd_wl1 = packet_rx.tcp.seq
     tcpcb.snd_wl2 = packet_rx.tcp.ack_seq
-    
-    
 
 def _init_rcv_seq(tcpcb: TCPCB, packet_rx: PacketRX):
     tcpcb.irs = packet_rx.tcp.seq
     tcpcb.rcv_nxt = (tcpcb.irs + 1) & 0xFF_FF_FF_FF
     tcpcb.rcv_adv = (tcpcb.rcv_nxt + tcpcb.rcv_wnd) \
                     & 0xFF_FF_FF_FF  # rcv_adv: the first seq not expected
-    
-        
 
 def _activ_open(tcpcb: TCPCB):
     tcpcb.core.tx_tcp(
@@ -807,6 +834,10 @@ def _activ_open(tcpcb: TCPCB):
         window=DEFAULT_RCV_WND,
         options=[TCPOptMSS()]
     )
+
+    # time output segment
+    _rtt_probe(tcpcb=tcpcb)
+
     _init_snd_seq(tcpcb=tcpcb)
 
     tcpcb.snd_nxt = (
@@ -815,6 +846,7 @@ def _activ_open(tcpcb: TCPCB):
     tcpcb.snd_max = tcpcb.snd_nxt
 
     _change_state(tcpcb=tcpcb, new=STATES.SYN_SENT)
+    # rtx-timer inited by 1.0 sec as RTO
     start_rtx_timer(tcpcb=tcpcb)
 
 def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
@@ -837,7 +869,8 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
     ):
 
         if _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx) > 0:
-
+            # time input segment
+            _rtt_sample(tcpcb=tcpcb)
             stop_rtx_timer(tcpcb=tcpcb)
 
             # l is the number of bytes enqueued into rcv_buf if data is received in this state (SYN-SENT);
@@ -904,6 +937,7 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
             if l > 0:
                 with tcpcb.recv_events:
                     tcpcb.recv_events.notify()
+
             return
 
         # The ACK does not ack our SYN.
@@ -917,7 +951,10 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
         stop_rtx_timer(tcpcb=tcpcb)
         # Retransmit our original SYN.
         _rollback_to_una(tcpcb=tcpcb)
-        
+
+        # clear the RTT probe so that we can try again
+        tcpcb.rtt = None
+
         _init_rcv_seq(tcpcb=tcpcb, packet_rx=packet_rx)
         _init_snd_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
@@ -928,6 +965,8 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
             syn=True, ack=True,
             window=tcpcb.rcv_wnd,
         )
+
+        _rtt_probe(tcpcb=tcpcb)
 
         tcpcb.snd_nxt = (
             (tcpcb.snd_nxt + 1) & 0xFF_FF_FF_FF
@@ -955,7 +994,7 @@ def _tx_syn_sent(tcpcb: TCPCB):
     start_rtx_timer(tcpcb=tcpcb)
 
 def _rx_syn_recv(tcpcb: TCPCB, packet_rx: PacketRX):
-    """ rx h for syn recv"""
+    """rx h for syn recv"""
 
     # NOTE: LISTEN is not implemented yet.
     # SYN-RECV is reachable only through simultaneous open.
@@ -986,12 +1025,14 @@ def _rx_syn_recv(tcpcb: TCPCB, packet_rx: PacketRX):
         # Do not drop purely due to OOO sequence or SYN mismatch.
         # As long as the segment is within the receive window and ACK is valid,
         # let sync-states handle SYN inconsistencies (e.g. via challenge ACK).
+        # but drop when the seq is invalid
         if _h_rx_seq(tcpcb=tcpcb, packet_rx=packet_rx) == TCP_DROP:
             _send_ack(tcpcb=tcpcb)
             return
 
         if _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx) > 0:
-
+            # take the RTT sample
+            _rtt_sample(tcpcb=tcpcb)
             stop_rtx_timer(tcpcb=tcpcb)
 
             _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -999,11 +1040,10 @@ def _rx_syn_recv(tcpcb: TCPCB, packet_rx: PacketRX):
             _change_state(tcpcb=tcpcb, new=STATES.ESTAB)
             with tcpcb.connect_events:
                 tcpcb.connect_events.notify()
-
+            return
 
         _drop_with_reset(tcpcb=tcpcb, packet_rx=packet_rx)
         return
-
 
 def _tx_syn_recv(tcpcb: TCPCB):
     """ tx h for syn recv state """
@@ -1038,24 +1078,31 @@ def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
 
-        # check if all our seq are acked
-        if tcpcb.snd_nxt == tcpcb.snd_una:
-            stop_rtx_timer(tcpcb=tcpcb)
+        if seq_acked > 0:
+            # update RTT/RTO
+            _rtt_sample(tcpcb=tcpcb)
 
-        with tcpcb.tcpcb_lock:
-            tcpcb.snd_r_buf_offset = (
-                (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
-            )
+            # check if all our seq are acked
+            if tcpcb.snd_nxt == tcpcb.snd_una:
+                stop_rtx_timer(tcpcb=tcpcb)
+
+            # Only some seqs have been acked.
+            else:
+                restart_rtx_timer(tcpcb=tcpcb)
+
+            with tcpcb.tcpcb_lock:
+                tcpcb.snd_r_buf_offset = (
+                    (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
+                )
+
+            # moving offsets means some space is available to write
+            # tcp_send userreq may be waiting for a signal to enqueue remaining data
+            with tcpcb.send_events:
+                tcpcb.send_events.notify()
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
         _append_rcv_data(tcpcb=tcpcb, packet_rx=packet_rx)
-
-        # tcp_send userreq may be waiting for
-        # a signal to enqueue remaining data
-        if seq_acked > 0:
-            with tcpcb.send_events:
-                tcpcb.send_events.notify()
 
         # check if the segment contains FIN
         if packet_rx.tcp.fin:
@@ -1075,6 +1122,7 @@ def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
 
     if accept_seg == TCP_ACCEPT_BUT_BUFFER:
         # TODO: implement OOO
+        tcpcb.ack_now = True
         tcpcb.core.tcp_events_schedule.schedule_event(
             event=TCPEvent(
                 type_=TCPEventType.SEND,
@@ -1084,6 +1132,7 @@ def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
         return
 
     if accept_seg == TCP_DROP:
+        tcpcb.ack_now = True
         tcpcb.core.tcp_events_schedule.schedule_event(
             event=TCPEvent(
                 type_=TCPEventType.SEND,
@@ -1129,7 +1178,6 @@ def _tx_estab(tcpcb: TCPCB):
              shutdown_requested=shutdown_req,
              close_requested=close_req)
 
-
 def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
     """rx h for fin-wait-1"""
     # This state is entered when the application invokes close/shutdown.
@@ -1137,6 +1185,8 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
     # no need to schedule any send event. We only send ACK segments.
     # NOTE: FIN retransmissions (or the final DATA+FIN segment, if applicable)
     # are handled by the TX routine for this state.
+    # NOTE: FIN already sent; skip RTO calculation so the rtx could
+    # Back off RTO if the peer doesn't ACK it.
 
     if packet_rx.tcp.dlen\
     or packet_rx.tcp.fin:
@@ -1154,40 +1204,43 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
 
-        # all outstanding data, including the FIN, has been acknowledged.
-        if tcpcb.snd_nxt == tcpcb.snd_una:
-            stop_rtx_timer(tcpcb=tcpcb)
+        if seq_acked > 0:
+            # all outstanding data, including the FIN, has been acknowledged.
+            if tcpcb.snd_nxt == tcpcb.snd_una:
+                stop_rtx_timer(tcpcb=tcpcb)
 
-            # exclude the FIN since it is not part of the send buffer.
-            with tcpcb.tcpcb_lock:
-                tcpcb.snd_r_buf_offset = (
-                    (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
-                )
-                rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-                rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
+                # exclude the FIN since it is not part of the send buffer.
+                with tcpcb.tcpcb_lock:
+                    tcpcb.snd_r_buf_offset = (
+                        (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
+                    )
+                    rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
+                    rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
 
-            if packet_rx.tcp.fin:
-                _change_state(tcpcb=tcpcb, new=STATES.TIME_WAIT)
-                start_time_wait_timer(tcpcb=tcpcb)
+                if packet_rx.tcp.fin:
+                    _change_state(tcpcb=tcpcb, new=STATES.TIME_WAIT)
+                    start_time_wait_timer(tcpcb=tcpcb)
+
+                else:
+                    _change_state(tcpcb=tcpcb, new=STATES.FIN_WAIT_2)
 
             else:
-                _change_state(tcpcb=tcpcb, new=STATES.FIN_WAIT_2)
+                # only some seqs have been acked.
+                restart_rtx_timer(tcpcb=tcpcb)
+                # our fin not acked yet. so move by the whole number of acked seq
+                with tcpcb.tcpcb_lock:
+                    tcpcb.snd_r_buf_offset = (
+                        (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
+                    )
+                    rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
+                    rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
 
-        else:
-            # our fin not acked yet. so move by the whole number of acked seq
-            with tcpcb.tcpcb_lock:
-                tcpcb.snd_r_buf_offset = (
-                    (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
-                )
-                rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-                rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
+                if packet_rx.tcp.fin:
+                    _change_state(tcpcb=tcpcb, new=STATES.CLOSING)
 
-            if packet_rx.tcp.fin:
-                _change_state(tcpcb=tcpcb, new=STATES.CLOSING)
-
-        _compute_rcv_wnd(tcpcb=tcpcb,
-                         w_offset=rcv_w_buf_offset,
-                         r_offset=rcv_r_buf_offset)
+            _compute_rcv_wnd(tcpcb=tcpcb,
+                            w_offset=rcv_w_buf_offset,
+                            r_offset=rcv_r_buf_offset)
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
@@ -1248,13 +1301,11 @@ def _tx_fin_wait_1(tcpcb: TCPCB):
         close_requested=False,
     )
 
-
 def _rx_fin_wait_2(tcpcb: TCPCB, packet_rx: PacketRX):
     """ rx h for fin w 2 """
     if packet_rx.tcp.dlen > 0\
     or packet_rx.tcp.fin:
         tcpcb.ack_now = True
-
 
     accept_seq = _h_rx_seq(tcpcb=tcpcb, packet_rx=packet_rx)
     if accept_seq == TCP_ACCEPT_AND_HANDLE:
@@ -1308,10 +1359,7 @@ def _tx_fin_wait_2(tcpcb: TCPCB):
 
     with tcpcb.tcpcb_lock:
         close_req = tcpcb.close_requested
-
     _h_active_close_tx(tcpcb=tcpcb, close_requested=close_req)
-
-
 
 def _rx_closing(tcpcb: TCPCB, packet_rx: PacketRX):
     """ rx h for closing """
@@ -1333,27 +1381,29 @@ def _rx_closing(tcpcb: TCPCB, packet_rx: PacketRX):
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
 
-        # all outstanding data, including the FIN, has been acknowledged.
-        if tcpcb.snd_una == tcpcb.snd_nxt:
-            stop_rtx_timer(tcpcb=tcpcb)
-            _change_state(tcpcb=tcpcb, new=STATES.TIME_WAIT)
-            start_time_wait_timer(tcpcb=tcpcb)
-            # exclude the FIN since it is not part of the send buffer.
-            with tcpcb.tcpcb_lock:
-                tcpcb.snd_r_buf_offset = (
-                    (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
-                )
+        if seq_acked > 0:
+            # all outstanding data, including the FIN, has been acknowledged.
+            if tcpcb.snd_una == tcpcb.snd_nxt:
+                stop_rtx_timer(tcpcb=tcpcb)
+                _change_state(tcpcb=tcpcb, new=STATES.TIME_WAIT)
+                start_time_wait_timer(tcpcb=tcpcb)
+                # exclude the FIN since it is not part of the send buffer.
+                with tcpcb.tcpcb_lock:
+                    tcpcb.snd_r_buf_offset = (
+                        (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
+                    )
 
-        else:
-            with tcpcb.tcpcb_lock:
-                tcpcb.snd_r_buf_offset = (
-                    (tcpcb.snd_r_buf_offset + seq_acked ) % len(tcpcb.snd_buf)
-                )
+            else:
+                # only some seqs have been acked.
+                restart_rtx_timer(tcpcb=tcpcb)
+                with tcpcb.tcpcb_lock:
+                    tcpcb.snd_r_buf_offset = (
+                        (tcpcb.snd_r_buf_offset + seq_acked ) % len(tcpcb.snd_buf)
+                    )
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx )
 
         return
-
 
     _send_ack(tcpcb=tcpcb)
 
@@ -1412,9 +1462,18 @@ def _rx_close_wait(tcpcb: TCPCB, packet_rx: PacketRX):
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
 
-        # check if all our seq are acked
-        if tcpcb.snd_una == tcpcb.snd_nxt:
-            stop_rtx_timer(tcpcb=tcpcb)
+        if seq_acked > 0:
+
+            # time this input segment
+            _rtt_sample(tcpcb=tcpcb)
+
+            # check if all our seq are acked
+            if tcpcb.snd_una == tcpcb.snd_nxt:
+                stop_rtx_timer(tcpcb=tcpcb)
+
+            else:
+                # only some seqs have been acked.
+                restart_rtx_timer(tcpcb=tcpcb)
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
@@ -1484,26 +1543,28 @@ def _rx_last_ack(tcpcb: TCPCB, packet_rx: PacketRX):
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
 
-        # all outstanding data, including the FIN, has been acknowledged.
-        if tcpcb.snd_una == tcpcb.snd_nxt:
-            stop_rtx_timer(tcpcb=tcpcb)
-            with tcpcb.tcpcb_lock:
-                # exclude the FIN since it is not part of the send buffer.
-                tcpcb.snd_r_buf_offset = (
-                    (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
-                )
-            _change_state(tcpcb=tcpcb, new=STATES.CLOSED)
+        if seq_acked > 0:
+            # time this input segment
+            _rtt_sample(tcpcb=tcpcb)
 
-        else:
-            with tcpcb.tcpcb_lock:
-                tcpcb.snd_r_buf_offset = (
-                    (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
-                )
+            # all outstanding data, including the FIN, has been acknowledged.
+            if tcpcb.snd_una == tcpcb.snd_nxt:
+                stop_rtx_timer(tcpcb=tcpcb)
+                with tcpcb.tcpcb_lock:
+                    # exclude the FIN since it is not part of the send buffer.
+                    tcpcb.snd_r_buf_offset = (
+                        (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
+                    )
+                _change_state(tcpcb=tcpcb, new=STATES.CLOSED)
+
+            else:
+                restart_rtx_timer(tcpcb=tcpcb)
+                with tcpcb.tcpcb_lock:
+                    tcpcb.snd_r_buf_offset = (
+                        (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
+                    )
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
-
-
-
 
 def _tx_last_ack(tcpcb: TCPCB):
     """ tx h for last ack """
@@ -1530,7 +1591,6 @@ def _tx_last_ack(tcpcb: TCPCB):
         close_requested=False,
         shutdown_requested=True
     )
-
 
 def _rx_time_wait(tcpcb: TCPCB, packet_rx: PacketRX):
     """ rx h for time wait """
@@ -1618,6 +1678,7 @@ def rtx(tcpcb: TCPCB):
     called by tcp-event-driven for:
     TCP Event Driven Type: RTX
     """
+    back_off_rto(tcpcb=tcpcb)
     _rollback_to_una(tcpcb=tcpcb)
     tcpcb.rtx_timer = None
     tx(tcpcb=tcpcb)
