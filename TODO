@@ -18,7 +18,6 @@ TODO / Missing Features
     - Multicast / broadcast handling
 
 - TCP:
-    - Implement RTO
     - Implement congestion control (CC)
     - Implement out-of-order (OOO) handling
 
