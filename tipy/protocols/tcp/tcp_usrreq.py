@@ -116,35 +116,18 @@ def tcp_send(*, self: Core, so: TCPSocket, data: bytes) -> int:
     original_len = len(mv)
     dlen = len(mv)
 
-    with tcpcb.tcpcb_lock:
-        snd_r_buf_offset = tcpcb.snd_r_buf_offset
-        snd_w_buf_offset = tcpcb.snd_w_buf_offset
-
-
     if __debug__:
         log(
             "tcpcb",
             f"{tcpcb}: send request size={dlen}, "
             f"available_space="
-            f"{tcpcb.snd_buf.free(w_offset=snd_w_buf_offset,
-                                  r_offset=snd_r_buf_offset
-                                  )}",
+            f"{tcpcb.snd_buf.free_space()}",
             level="DEBUG"
         )
 
     while dlen > 0:
-        l = tcpcb.snd_buf.enqueue(
-                    w_offset=snd_w_buf_offset,
-                    r_offset=snd_r_buf_offset,
-                    buffer=mv
-                )
-
+        l = tcpcb.snd_buf.enqueue(buffer=mv)
         dlen -= l
-
-        with tcpcb.tcpcb_lock:
-            tcpcb.snd_w_buf_offset = (
-                ( tcpcb.snd_w_buf_offset + l ) % len(tcpcb.snd_buf)
-            )
 
         self.tcp_events_schedule.schedule_event(
             event=TCPEvent(
@@ -171,31 +154,19 @@ def tcp_recv(*, self: Core, so: TCPSocket, bufsize: int) -> list[memoryview]:
 
     with tcpcb.tcpcb_lock:
         state = tcpcb.state
-        rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-        rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
 
     if state in NON_RECEIVABLE_STATES:
         return []
 
     # check if there is no data in rcv_buf
-    if tcpcb.rcv_buf.is_empty(w_offset=rcv_w_buf_offset,
-                              r_offset=rcv_r_buf_offset
-                              ):
+    if tcpcb.rcv_buf.is_empty():
         with tcpcb.recv_events:
             tcpcb.recv_events.wait()
 
     so.raise_exception()
 
-    # retake a snapshot, because we may get notified
-    # so the rcv states may be modified
-    with tcpcb.tcpcb_lock:
-        rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-        rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
-
     if __debug__:
-        available = tcpcb.rcv_buf.free(w_offset=rcv_w_buf_offset,
-                                       r_offset=rcv_r_buf_offset
-                                       )
+        available = tcpcb.rcv_buf.free_space()
 
         log(
             "tcpcb",
@@ -203,15 +174,7 @@ def tcp_recv(*, self: Core, so: TCPSocket, bufsize: int) -> list[memoryview]:
             level="DEBUG"
         )
 
-    l = tcpcb.rcv_buf.dequeue(w_offset=rcv_w_buf_offset,
-                              r_offset=rcv_r_buf_offset,
-                              n=bufsize
-                              )
-    with tcpcb.tcpcb_lock:
-        iov_dlen = sum(len(part) for part in l)
-        tcpcb.rcv_r_buf_offset = (
-            (tcpcb.rcv_r_buf_offset + iov_dlen )  % len(tcpcb.rcv_buf)
-        )
+    l = tcpcb.rcv_buf.dequeue(n=bufsize)
 
     return l
 

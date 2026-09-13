@@ -595,7 +595,7 @@ def _h_active_close_rx(tcpcb: TCPCB, packet_rx: PacketRX) -> bool:
 
 def _rollback_to_una(tcpcb: TCPCB):
     """
-    Rewind snd_r_temp_buf_offset to the last unacknowledged byte
+    Rewind the virtual read offset to the last unacknowledged byte
     and reset snd_nxt to snd_una. This occurs during retransmission.
     """
     if __debug__:
@@ -605,18 +605,15 @@ def _rollback_to_una(tcpcb: TCPCB):
             f'({seq_diff(tcpcb.snd_nxt, tcpcb.snd_una)} unacked)',
             'DEBUG'
         )
-    tcpcb.snd_r_temp_buf_offset = tcpcb.snd_r_buf_offset
+    tcpcb.snd_buf.roll_back_to_r()
     tcpcb.snd_nxt = tcpcb.snd_una
 
-def _compute_rcv_wnd(tcpcb: TCPCB, w_offset: int, r_offset: int) -> None:
+def _compute_rcv_wnd(tcpcb: TCPCB) -> None:
     """
     Compute new rcv_wnd and advance rcv_adv if needed
     """
 
-    rcv_buf_free_space = tcpcb.rcv_buf.free(
-        w_offset=w_offset,
-        r_offset=r_offset
-    )
+    rcv_buf_free_space = tcpcb.rcv_buf.free_space()
     # set our new local window
     tcpcb.rcv_wnd = rcv_buf_free_space
 
@@ -685,7 +682,7 @@ def _tx_loop(*,
     while dlen > 0:
         n = min(tcpcb.remote_mss, snd_wnd, dlen)
         seg_data = _generate_segment_payload(buf=data, n=n)
-        seg_data_len = len(seg_data)
+        seg_dlen = len(seg_data)
         should_fin = any((shutdown_requested, close_requested)) \
                      and not data
 
@@ -698,7 +695,7 @@ def _tx_loop(*,
             data=seg_data
         )
 
-        tcpcb.snd_nxt = (tcpcb.snd_nxt + seg_data_len + should_fin) & 0xFF_FF_FF_FF
+        tcpcb.snd_nxt = (tcpcb.snd_nxt + seg_dlen + should_fin) & 0xFF_FF_FF_FF
 
         # check if this is not a retransmission
         if seq_gt(tcpcb.snd_nxt, tcpcb.snd_max):
@@ -707,14 +704,9 @@ def _tx_loop(*,
             # do an RTT prob
             _rtt_probe(tcpcb=tcpcb)
 
-        dlen -= seg_data_len
-        snd_wnd -= seg_data_len
-        bytes_send_counter += seg_data_len
-
-        # move on the temp_r_offset
-        tcpcb.snd_r_temp_buf_offset = (
-            (tcpcb.snd_r_temp_buf_offset + seg_data_len) % len(tcpcb.snd_buf)
-        )
+        dlen -= seg_dlen
+        snd_wnd -= seg_dlen
+        bytes_send_counter += seg_dlen
 
         if should_fin:
             tcpcb.sent_fin = should_fin
@@ -752,13 +744,7 @@ def _append_rcv_data(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     # Lock is only used to snapshot rcv offsets; copy to rcv_buf happens unlocked
     # to avoid holding the lock during memory operations.
 
-    with tcpcb.tcpcb_lock:
-        rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
-        rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-
-    _compute_rcv_wnd(tcpcb=tcpcb,
-                     w_offset=rcv_w_buf_offset,
-                     r_offset=rcv_r_buf_offset)
+    _compute_rcv_wnd(tcpcb=tcpcb)
 
     if tcpcb.rcv_wnd == 0:
         return 0
@@ -776,20 +762,10 @@ def _append_rcv_data(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
                 level="DEBUG"
             )
 
-        l = tcpcb.rcv_buf.enqueue(
-            w_offset=rcv_w_buf_offset,
-            r_offset=rcv_r_buf_offset,
-            buffer=data[start : dlen]
-        )
+        l = tcpcb.rcv_buf.enqueue(buffer=data[start : dlen])
 
         # reduce RCV.WND
         tcpcb.rcv_wnd -= tcpcb.tcp_data_len
-
-        # move on the write offset
-        with tcpcb.tcpcb_lock:
-            tcpcb.rcv_w_buf_offset = (
-                (tcpcb.rcv_w_buf_offset + l) % len(tcpcb.rcv_buf)
-            )
 
         with tcpcb.recv_events:
             tcpcb.recv_events.notify()
@@ -799,14 +775,16 @@ def _append_rcv_data(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     return 0
 
 def _drain_snd_buf(tcpcb: TCPCB) -> list[memoryview]:
-    with tcpcb.tcpcb_lock:
-        snd_w_buf_offset = tcpcb.snd_w_buf_offset
-        snd_r_buf_offset = tcpcb.snd_r_temp_buf_offset
-
+    """
+    Dequeue up to the minimum of TCP_MAX_TX_BYTES and snd_wnd.
+    The actual amount may be smaller depending on the available data
+    in snd_buf.
+    """
     return tcpcb.snd_buf.dequeue(
-        w_offset=snd_w_buf_offset,
-        r_offset=snd_r_buf_offset,
-        n=tcpcb.snd_wnd
+        n=min(
+            TCP_MAX_TX_BYTES,
+            tcpcb.snd_wnd,
+        )
     )
 
 def _init_snd_seq(tcpcb: TCPCB):
@@ -895,25 +873,11 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
             # Since _append_rcv_data() notifies the application whenever data becomes
             # available in rcv_buf, do not use _append_rcv_data() here; enqueue it manually.
             if packet_rx.tcp.dlen > 0:
-                with tcpcb.tcpcb_lock:
-                    rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
-                    rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-
-                l = tcpcb.rcv_buf.enqueue(
-                    w_offset=rcv_w_buf_offset,
-                    r_offset=rcv_r_buf_offset,
-                    buffer=packet_rx.tcp.data
-                )
+                l = tcpcb.rcv_buf.enqueue(buffer=packet_rx.tcp.data)
 
                 tcpcb.rcv_wnd -= l
 
                 tcpcb.rcv_nxt = (tcpcb.rcv_nxt + l) & 0xFF_FF_FF_FF
-
-                # move on the write offset
-                with tcpcb.tcpcb_lock:
-                    tcpcb.rcv_w_buf_offset = (
-                            (tcpcb.rcv_w_buf_offset + l) % len(tcpcb.rcv_buf)
-                    )
 
                 if __debug__:
                     log("tcpcb",
@@ -1090,10 +1054,8 @@ def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
             else:
                 restart_rtx_timer(tcpcb=tcpcb)
 
-            with tcpcb.tcpcb_lock:
-                tcpcb.snd_r_buf_offset = (
-                    (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
-                )
+            # Advance r past ACKed bytes; they no longer need retransmission.
+            tcpcb.snd_buf.free(n=seq_acked)
 
             # moving offsets means some space is available to write
             # tcp_send userreq may be waiting for a signal to enqueue remaining data
@@ -1145,14 +1107,10 @@ def _tx_estab(tcpcb: TCPCB):
     data = _drain_snd_buf(tcpcb=tcpcb)
 
     with tcpcb.tcpcb_lock:
-        rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-        rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
         shutdown_req = tcpcb.shutdown_requested
         close_req = tcpcb.close_requested
 
-    _compute_rcv_wnd(tcpcb=tcpcb,
-                     w_offset=rcv_w_buf_offset,
-                     r_offset=rcv_r_buf_offset)
+    _compute_rcv_wnd(tcpcb=tcpcb)
 
     if not data:
         if _h_active_close_tx(tcpcb=tcpcb, close_requested=close_req):
@@ -1209,13 +1167,9 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
             if tcpcb.snd_nxt == tcpcb.snd_una:
                 stop_rtx_timer(tcpcb=tcpcb)
 
-                # exclude the FIN since it is not part of the send buffer.
-                with tcpcb.tcpcb_lock:
-                    tcpcb.snd_r_buf_offset = (
-                        (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
-                    )
-                    rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-                    rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
+                # Advance r past ACKed bytes; they no longer need retransmission.
+                # Exclude acked FIN; it is not part of snd_buf.
+                tcpcb.snd_buf.free(n=seq_acked-1)
 
                 if packet_rx.tcp.fin:
                     _change_state(tcpcb=tcpcb, new=STATES.TIME_WAIT)
@@ -1228,19 +1182,12 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
                 # only some seqs have been acked.
                 restart_rtx_timer(tcpcb=tcpcb)
                 # our fin not acked yet. so move by the whole number of acked seq
-                with tcpcb.tcpcb_lock:
-                    tcpcb.snd_r_buf_offset = (
-                        (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
-                    )
-                    rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-                    rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
+                tcpcb.snd_buf.free(n=seq_acked)
 
                 if packet_rx.tcp.fin:
                     _change_state(tcpcb=tcpcb, new=STATES.CLOSING)
 
-            _compute_rcv_wnd(tcpcb=tcpcb,
-                            w_offset=rcv_w_buf_offset,
-                            r_offset=rcv_r_buf_offset)
+            _compute_rcv_wnd(tcpcb=tcpcb)
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
@@ -1273,13 +1220,9 @@ def _tx_fin_wait_1(tcpcb: TCPCB):
     data = _drain_snd_buf(tcpcb=tcpcb)
 
     with tcpcb.tcpcb_lock:
-        rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-        rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
         close_req = tcpcb.close_requested
 
-    _compute_rcv_wnd(tcpcb=tcpcb,
-                     w_offset=rcv_w_buf_offset,
-                     r_offset=rcv_r_buf_offset)
+    _compute_rcv_wnd(tcpcb=tcpcb)
     if not data:
         if _h_active_close_tx(tcpcb=tcpcb, close_requested=close_req):
             return
@@ -1317,13 +1260,7 @@ def _rx_fin_wait_2(tcpcb: TCPCB, packet_rx: PacketRX):
             _signal_rst(tcpcb=tcpcb)
             return
 
-        with tcpcb.tcpcb_lock:
-            rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-            rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
-
-        _compute_rcv_wnd(tcpcb=tcpcb,
-                         w_offset=rcv_w_buf_offset,
-                         r_offset=rcv_r_buf_offset)
+        _compute_rcv_wnd(tcpcb=tcpcb)
 
         # FIN already acknowledged; no local send state remains.
         # ACK processed for correctness; peer window still updated for TCP state tracking.
@@ -1388,18 +1325,13 @@ def _rx_closing(tcpcb: TCPCB, packet_rx: PacketRX):
                 _change_state(tcpcb=tcpcb, new=STATES.TIME_WAIT)
                 start_time_wait_timer(tcpcb=tcpcb)
                 # exclude the FIN since it is not part of the send buffer.
-                with tcpcb.tcpcb_lock:
-                    tcpcb.snd_r_buf_offset = (
-                        (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
-                    )
+                tcpcb.snd_buf.free(n=seq_acked - 1)
 
             else:
                 # only some seqs have been acked.
                 restart_rtx_timer(tcpcb=tcpcb)
-                with tcpcb.tcpcb_lock:
-                    tcpcb.snd_r_buf_offset = (
-                        (tcpcb.snd_r_buf_offset + seq_acked ) % len(tcpcb.snd_buf)
-                    )
+                # Advance r past ACKed bytes; they no longer need retransmission.
+                tcpcb.snd_buf.free(n=seq_acked)
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx )
 
@@ -1477,10 +1409,8 @@ def _rx_close_wait(tcpcb: TCPCB, packet_rx: PacketRX):
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
-        with tcpcb.tcpcb_lock:
-            tcpcb.snd_r_buf_offset = (
-                (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
-            )
+        # Advance r past ACKed bytes; they no longer need retransmission.
+        tcpcb.snd_buf.free(n=seq_acked)
 
     tcpcb.core.tcp_events_schedule.schedule_event(
             event=TCPEvent(
@@ -1493,14 +1423,11 @@ def _tx_close_wait(tcpcb: TCPCB):
     """ tx h for close w """
 
     with tcpcb.tcpcb_lock:
-        rcv_r_buf_offset = tcpcb.rcv_r_buf_offset
-        rcv_w_buf_offset = tcpcb.rcv_w_buf_offset
+
         shutdown_req = tcpcb.shutdown_requested
         close_req = tcpcb.close_requested
 
-    _compute_rcv_wnd(tcpcb=tcpcb,
-                     w_offset=rcv_w_buf_offset,
-                     r_offset=rcv_r_buf_offset)
+    _compute_rcv_wnd(tcpcb=tcpcb)
 
     data = _drain_snd_buf(tcpcb)
 
@@ -1550,19 +1477,15 @@ def _rx_last_ack(tcpcb: TCPCB, packet_rx: PacketRX):
             # all outstanding data, including the FIN, has been acknowledged.
             if tcpcb.snd_una == tcpcb.snd_nxt:
                 stop_rtx_timer(tcpcb=tcpcb)
-                with tcpcb.tcpcb_lock:
-                    # exclude the FIN since it is not part of the send buffer.
-                    tcpcb.snd_r_buf_offset = (
-                        (tcpcb.snd_r_buf_offset + seq_acked - 1) % len(tcpcb.snd_buf)
-                    )
+                # Advance r past ACKed bytes; they no longer need retransmission.
+                # Exclude acked FIN; it is not part of snd_buf.
+                tcpcb.snd_buf.free(n=seq_acked - 1)
                 _change_state(tcpcb=tcpcb, new=STATES.CLOSED)
 
             else:
                 restart_rtx_timer(tcpcb=tcpcb)
-                with tcpcb.tcpcb_lock:
-                    tcpcb.snd_r_buf_offset = (
-                        (tcpcb.snd_r_buf_offset + seq_acked) % len(tcpcb.snd_buf)
-                    )
+                # Advance r past ACKed bytes; they no longer need retransmission.
+                tcpcb.snd_buf.free(n=seq_acked)
 
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
@@ -1682,36 +1605,3 @@ def rtx(tcpcb: TCPCB):
     _rollback_to_una(tcpcb=tcpcb)
     tcpcb.rtx_timer = None
     tx(tcpcb=tcpcb)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

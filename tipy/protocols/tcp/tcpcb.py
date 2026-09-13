@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from random import randint
 from threading import RLock
+from random import randint
 
-from tipy.lib.buffer import RingBuffer
+from tipy.lib.buffer import RingBuffer, RRingBuffer
 from tipy.protocols.tcp.tcp import STATES
 from tipy.lib.ip_address import IPAddress
 
@@ -35,7 +35,7 @@ class TCPCB:
     Concurrency model:
     - The event loop is the primary owner of the connection state.
     - A limited set of fields is shared with external threads.
-    - Access to shared state is protected via `_tcpcb_lock`.
+    - Access to shared state is protected via `tcpcb_lock`.
 
     See: docs/tcpcb_concurrency.md for full details.
     """
@@ -159,19 +159,12 @@ class TCPCB:
         # tcpcb lock (rcv_wnd, rcv_adv, *_requested, state)
         self.tcpcb_lock: RLock = RLock()
 
+        # buffers
         self.rcv_buf: RingBuffer = RingBuffer(size=DEFAULT_RECV_BUFF)
-        self.snd_buf: RingBuffer = RingBuffer(size=DEFAULT_SEND_BUFF)
-
-        self.rcv_w_buf_offset: int = 0 # rcv_buf write offset
-        self.rcv_r_buf_offset: int = 0 # rcv_buf read offset
-
-        self.snd_w_buf_offset: int = 0 # snd_buf write offset
-        self.snd_r_buf_offset: int = 0 # snd_buf read offset
-
-        # temporary read offset, used to virtually indicate the read offset
-        # untile the TCB make sure that the sending data is acked
-        # this offset must be used by the _drain_allowed_snd_buf() function
-        self.snd_r_temp_buf_offset: int = 0
+        # Use a recoverable ring buffer. The TX path handles retransmission,
+        # so the send buffer must preserve unacknowledged data and allow
+        # tracking and rollback of the read position.
+        self.snd_buf: RRingBuffer = RRingBuffer(size=DEFAULT_SEND_BUFF)
 
         # Define the offset and length of acceptable data within the segment.
         # Used when a segment partially overlaps the RCV.WND in order way
