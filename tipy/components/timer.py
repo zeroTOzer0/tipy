@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import count
 from time import monotonic_ns
 from heapq import heappush, heappop
 from threading import Thread, Condition
@@ -58,9 +59,13 @@ class TimerTask:
 
 class Timer:
     def __init__(self, core: Core | None = None):
-        self._tasks: list[tuple[int, TimerTask]] = []
+        self._tasks: list[tuple[int, int, TimerTask]] = []
         self._stop_thread: bool = False
         self._cond: Condition = Condition()
+
+        # Multiple tasks may have the same execute_at_ms. Since TimerTask is not
+        # comparable, this counter provides a unique tie-breaker for heapq.
+        self._counter: count = count()
 
     def start(self):
         Thread(target=self._timer_loop, daemon=True).start()
@@ -95,7 +100,7 @@ class Timer:
 
                 while self._tasks and self._tasks[0][0] <= monotonic_ns() // 1_000_000:
                     task = heappop(self._tasks)
-                    ready_tasks.append(task[1])
+                    ready_tasks.append(task[2])
 
             for t in ready_tasks:
                 t.execute()
@@ -124,12 +129,13 @@ class Timer:
         with self._cond:
             heappush(
                 self._tasks,
-                (task.execute_at_ms(), task)
+                (task.execute_at_ms(), next(self._counter), task)
             )
             if __debug__:
                 log(
                     "timer",
-                    f"timer scheduled: {timer_name or 'unnamed'} (expires in {expire_after}s)",
+                    f"timer scheduled: {timer_name or 'unnamed'} (expires in {expire_after}s) "
+                    f"at {task.execute_at_ms()}",
                     level="DEBUG"
                 )
             self._cond.notify()
