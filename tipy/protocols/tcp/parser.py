@@ -119,11 +119,9 @@ class TCPParser:
 
             return options
 
-
-
     @cached_property
     def dlen(self):
-        return len(self) - self.doff
+        return len(self._frame) - self.doff
 
     @cached_property
     def data(self):
@@ -133,9 +131,8 @@ class TCPParser:
     def header(self):
         return self._frame[:self.doff]
 
-
     def __len__(self):
-        return len(self._frame)
+        return self.doff
 
     def __str__(self):
         return (
