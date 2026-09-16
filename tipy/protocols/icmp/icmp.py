@@ -1,3 +1,4 @@
+ICM_HEADER_LEN = 8
 # --------------------------
 # ICMP TYPES
 DESTINATION_UNREACHABLE = 3
