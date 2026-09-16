@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+from functools import cached_property
 from struct import unpack_from
 
-from functools import cached_property
 
 from tipy.protocols.icmp.icmp import (
     UNREACHABLE_CODES,
@@ -10,15 +10,14 @@ from tipy.protocols.icmp.icmp import (
     ECHO_REQUEST,
     ECHO_REPLY,
     TIME_EXCEEDED,
-    TIME_EXCEEDED_CODES
+    TIME_EXCEEDED_CODES,
+    ICM_HEADER_LEN
 
 )
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tipy.lib.packet import PacketRX
-
-
 
 class ICMPParser:
 
@@ -51,30 +50,29 @@ class ICMPParser:
 
     @cached_property
     def err_data(self):
-        return self._frame[8:]
+        return self._frame[ICM_HEADER_LEN:]
 
     @cached_property
     def echo_data(self):
-        return self._frame[8:]
+        return self._frame[ICM_HEADER_LEN:]
 
     @cached_property
     def data(self) :
         """
         Read the whole packet.
         """
-        return self._frame
+        return self._frame[ICM_HEADER_LEN:]
 
     @cached_property
     def dlen(self):
-        return len(self._frame[8:])
+        return len(self._frame[ICM_HEADER_LEN:])
 
     @cached_property
     def header(self):
-        return self._frame[:8]
-
+        return self._frame[:ICM_HEADER_LEN]
 
     def __len__(self) -> int:
-        return len(self._frame)
+        return ICM_HEADER_LEN
 
     def __str__(self) -> str:
         if self.type == DESTINATION_UNREACHABLE:
@@ -86,7 +84,7 @@ class ICMPParser:
             return (
                 f"TIME_EXCEEDED/"
                 f"{TIME_EXCEEDED_CODES.get(self.code, '???')}, "
-                f"dlen {len(self) - 8}"
+                f"dlen {len(self) - ICM_HEADER_LEN}"
             )
 
         if self.type == ECHO_REQUEST and self.code == 0:
