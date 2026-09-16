@@ -1,6 +1,7 @@
 from __future__ import annotations
 import struct
 
+from tipy.lib.csum import inet_csum
 from tipy.lib.logger import log
 from tipy.protocols.ip.parser import IPParser
 from tipy.config.config import DEFRAGMENTATION_TIMEOUT, ENABLE_IP_OPTION
@@ -329,6 +330,29 @@ def _ip_reass(self: Core,
         return False
 
 def rx_ip(self: Core, packet_rx: PacketRX):
+    """
+    IP RX interface.
+
+    1. Check if the IP header length is acceptable.
+    2. Calculate the IP checksum.
+    3. Check the TTL value.
+    4. Check if this is a complete packet, pass it to the next layer,
+    and return.
+    5. If this is a fragment, reassemble the fragments, pass the
+    reassembled packet to the next layer, and return.
+    6. If the next-layer protocol is not supported, try to resolve a
+    RAW-IP socket and pass the payload to it, or send an ICMP message.
+    """
+
+    if len(packet_rx.frame) < 20:
+        if __debug__:
+            log(
+                'ip',
+                f'[{packet_rx.tracker}] ip header too short',
+                "DEBUG"
+            )
+        return
+
     IPParser(packet_rx)
 
     if __debug__: log(
@@ -336,6 +360,15 @@ def rx_ip(self: Core, packet_rx: PacketRX):
         f"{packet_rx.tracker} - "
         f'{packet_rx.ip}'
     )
+
+    if inet_csum(data=packet_rx.frame[:packet_rx.ip.ihl]):
+        if __debug__:
+            log(
+                'ip',
+                f'[{packet_rx.tracker}] ip bad checksum.',
+                "DEBUG"
+            )
+        return
 
     if packet_rx.ip.ihl > 20 and not ENABLE_IP_OPTION:
         if __debug__:
@@ -363,7 +396,7 @@ def rx_ip(self: Core, packet_rx: PacketRX):
         return
 
 
-    if packet_rx.ip.ttl == 0:
+    if not packet_rx.ip.ttl:
         if __debug__:
             log(
                 "ip",

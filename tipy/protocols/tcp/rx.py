@@ -1,16 +1,40 @@
 from __future__ import annotations
 
-from tipy.lib.ip_address import IPAddress
-from tipy.lib.logger import log
-from tipy.protocols.tcp.parser import TCPParser
+from struct import pack
+
 from tipy.protocols.tcp.tcp import TCPEvent, TCPEventType
+from tipy.protocols.tcp.parser import TCPParser
+from tipy.lib.ip_address import IPAddress
+from tipy.lib.csum import inet_csum
+from tipy.lib.logger import log
+
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tipy.components.core import Core
     from tipy.lib.packet import PacketRX
 
+
 def rx_tcp(self: Core, packet_rx: PacketRX):
+    """
+    TCP RX interface
+
+    1. Check if the TCP header length is acceptable.
+    2. Calculate the TCP checksum.
+    3. Try to resolve the socket, schedule an RX event, and return.
+    4. Send RST and return if no matching socket exists.
+    """
+    l = len(packet_rx.frame)
+
+    if l < 20:
+        if __debug__:
+            log(
+                'tcp',
+                f'[{packet_rx.tracker}] tcp header too short',
+                "DEBUG"
+            )
+        return
+
     TCPParser(packet_rx)
     if __debug__:
         log(
@@ -18,9 +42,34 @@ def rx_tcp(self: Core, packet_rx: PacketRX):
         f'{packet_rx.tracker} - {packet_rx.tcp}'
         )
 
+    dst_ip = packet_rx.ip.dst
+    src_ip = packet_rx.ip.src
+
+    # make the phdr follows network byte order
+    # then pass it with native system byte order
+    phdr = memoryview(
+            pack(
+                '! 4s 4s B B H',
+                IPAddress(src_ip).ip2raw(),
+                IPAddress(dst_ip).ip2raw(),
+                0,
+                packet_rx.ip.protocol,
+                l
+            )
+        )
+
+    if inet_csum(data=packet_rx.frame, inited_sum=sum(phdr.cast('I'))):
+        if __debug__:
+            log(
+                'tcp',
+                f'[{packet_rx.tracker}] tcp bad checksum.',
+                "DEBUG"
+            )
+        return
+
     sock_id: tuple = (
-        packet_rx.ip.dst, packet_rx.tcp.dst,
-        packet_rx.ip.src, packet_rx.tcp.src
+        dst_ip, packet_rx.tcp.dst,
+        src_ip, packet_rx.tcp.src
     )
 
     if sock_id in self.tcp.sockets:
@@ -33,8 +82,6 @@ def rx_tcp(self: Core, packet_rx: PacketRX):
             )
         )
         return
-
-
 
     # Generate RST for a non-existent connection.
     # if ACK is set, then: SEQ = SEG.ACK.

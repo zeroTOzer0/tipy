@@ -1,22 +1,21 @@
 from __future__ import annotations
 
-from tipy.protocols.icmp.icmp import (
-DESTINATION_UNREACHABLE,
-PORT_UNREACHABLE,
-PROTOCOL_UNREACHABLE,
-
-ECHO_REQUEST,
-ECHO_REPLY,
-ECHO_REQ_REP # Code=0
-
-)
-
-from tipy.lib.errno import Errno
+import struct
 
 from tipy.protocols.icmp.parser import ICMPParser
-from tipy.lib.logger import log
 from tipy.lib.ip_address import IPAddress
-import struct
+from tipy.lib.csum import inet_csum
+from tipy.lib.errno import Errno
+from tipy.lib.logger import log
+from tipy.protocols.icmp.icmp import (
+    DESTINATION_UNREACHABLE,
+    PORT_UNREACHABLE,
+    PROTOCOL_UNREACHABLE,
+
+    ECHO_REQUEST,
+    ECHO_REPLY,
+    ECHO_REQ_REP,  # Code=0
+)
 
 from typing import TYPE_CHECKING, Callable
 
@@ -27,7 +26,6 @@ if TYPE_CHECKING:
 
 IP_PROTO_UDP = 17
 IP_PROTO_TCP = 6
-
 
 def _h_icmp_dest_unreach_port(self: Core, packet_rx: PacketRX):
     """
@@ -60,8 +58,6 @@ def _h_icmp_dest_unreach_port(self: Core, packet_rx: PacketRX):
             f"destination unreachable (port): {sock_id}",
             level="WARN"
         )
-
-
 
 def _h_icmp_dest_unreach_proto(self: Core, packet_rx: PacketRX):
     """
@@ -138,9 +134,6 @@ def _h_icmp_echo_rep(self: Core, packet_rx: PacketRX):
 
     #TODO: try the sock_id with zeros as the last item in the tuple
 
-
-
-
 icmp_map: dict[tuple[int, int], Callable[[Core, PacketRX], None]] = {
 
     (DESTINATION_UNREACHABLE, PORT_UNREACHABLE) : _h_icmp_dest_unreach_port,
@@ -154,10 +147,37 @@ icmp_map: dict[tuple[int, int], Callable[[Core, PacketRX], None]] = {
 }
 
 def rx_icmp(self: Core, packet_rx: PacketRX):
-    ICMPParser(packet_rx)
-    if __debug__: log('icmp', f"{packet_rx.tracker} - "
-        f'{packet_rx.icmp}')
+    """
+    ICMP RX interface.
 
+    1. Check if the ICMP header length is acceptable.
+    2. Calculate the ICMP checksum.
+    3. Dispatch the ICMP type/code to the corresponding handler.
+    """
+    l = len(packet_rx.frame)
+
+    if l < 8:
+        if __debug__:
+            log(
+                'icmp',
+                f'[{packet_rx.tracker}] icmp header too short',
+                "DEBUG"
+            )
+        return
+
+    ICMPParser(packet_rx)
+    if __debug__:
+        log('icmp',
+            f"{packet_rx.tracker} - {packet_rx.icmp}")
+
+    if inet_csum(data=packet_rx.frame):
+        if __debug__:
+            log(
+                'icmp',
+                f'[{packet_rx.tracker}] icmp bad checksum.',
+                "DEBUG"
+            )
+        return
 
     handle_icmp = icmp_map.get(
         (packet_rx.icmp.type, packet_rx.icmp.code), None
