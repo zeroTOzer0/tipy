@@ -1,5 +1,7 @@
-
 import struct
+
+from tipy.lib.tracker import Tracker
+from tipy.lib.csum import inet_csum
 from tipy.protocols.icmp.icmp import (
     UNREACHABLE_CODES,
     TIME_EXCEEDED_CODES,
@@ -9,10 +11,6 @@ from tipy.protocols.icmp.icmp import (
     ECHO_REQUEST
 
 )
-
-from tipy.lib.csum import inet_csum
-from tipy.lib.tracker import Tracker
-
 
 class ICMPBuilder:
     def __init__(self,
@@ -31,21 +29,23 @@ class ICMPBuilder:
         self._echo_id: int | None = echo_id
         self._echo_seq: int | None = echo_seq
 
-        self.__tracker = Tracker(prefix='tx', echo_tracker=tracker)
+        self._tracker = Tracker(prefix='tx', echo_tracker=tracker)
 
 
-    def build(self, frame: memoryview, psum: int=0):
+    def build(self, frame: memoryview, phsum: int=0):
+        # data can be passed as memoryview causing struct error
+        # so copy it intp frame manually
         if self._type in (DESTINATION_UNREACHABLE, TIME_EXCEEDED):
             struct.pack_into(
-                f'! B B H L {len(self._data)}s',
+                f'! B B H L',
                 frame,
                 0,
                 self._type,
                 self._code,
                 0, # chksum placeholder
                 0,
-                self._data
             )
+            frame[8:8+len(self._data)] = self._data
 
             struct.pack_into(
                 f'! H',
@@ -56,7 +56,7 @@ class ICMPBuilder:
 
         elif self._type in (ECHO_REQUEST, ECHO_REPLY):
             struct.pack_into(
-                f'! B B H H H {len(self._data)}s',
+                f'! B B H H H',
                 frame,
                 0,
                 self._type,
@@ -64,8 +64,8 @@ class ICMPBuilder:
                 0,  # checksum placeholder
                 self._echo_id,
                 self._echo_seq,
-                self._data
             )
+            frame[8:8 + len(self._data)] = self._data
             # recalculate checksum
             struct.pack_into(
                 f'! H',
@@ -73,7 +73,6 @@ class ICMPBuilder:
                 2,
                 inet_csum(data=frame)
             )
-
 
     def __len__(self):
         return len(self._data) + 8
@@ -105,9 +104,8 @@ class ICMPBuilder:
                 f"seq {self._echo_seq}, dlen {len(self._data)}"
             )
 
-
         return f'UNSUPPORTED_ICMP_MESSAGE, type {self._type}, code {self._code}, dlen {len(self._data)}'
 
     @property
     def tracker(self):
-        return self.__tracker
+        return self._tracker
