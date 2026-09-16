@@ -6,6 +6,7 @@ from tipy.config.config import  MTU
 from tipy.lib.csum import inet_csum
 from tipy.lib.tracker import Tracker
 from tipy.lib.ip_address import IPAddress
+from tipy.protocols.icmp.rx import IP_PROTO_TCP, IP_PROTO_UDP
 from tipy.protocols.ip.ip import (
     IP_TTL,
     IP_VERSION,
@@ -13,8 +14,6 @@ from tipy.protocols.ip.ip import (
     IP_IHL,
     IP_OPT_NOP_LEN,
 )
-
-
 
 from tipy.protocols.ip.exceptions import IPBadOptionError
 
@@ -25,6 +24,7 @@ if TYPE_CHECKING:
     from tipy.protocols.icmp.builder import ICMPBuilder
     from tipy.protocols.udp.builder import UDPBuilder
 
+NEED_P_HDR_SUM = {IP_PROTO_TCP, IP_PROTO_UDP}
 
 def _ip_opt_padding(opt: list[IPOptLSRR
                               | IPOptNOP
@@ -88,17 +88,18 @@ class IPBuilder:
         """
         pseudo header sum
         """
-        hdr = struct.pack(
+        psum = struct.pack(
                 '! 4s 4s B B H',
                 self._src.ip2raw(),
                 self._dst.ip2raw(),
                 0,
                 self._protocol,
-            self._total_len - self._ihl * 4
-            )
+                self._total_len - self._ihl * 4
+                )
 
-        return sum(struct.unpack('!3L', hdr))
-
+        return sum(
+            struct.unpack('=3L', psum)
+        )
 
     def build(self, frame: memoryview):
 
@@ -131,8 +132,23 @@ class IPBuilder:
             10,
             inet_csum(frame)
         )
-
-        self._payload.build(frame=frame[self._ihl * 4:], psum=self.psum())
+        if self._protocol in NEED_P_HDR_SUM:
+            # make the phdr with network byte order
+            # then pass it with native system byte order
+            phdr = memoryview(
+                struct.pack(
+                    '! 4s 4s B B H',
+                    self._src.ip2raw(),
+                    self._dst.ip2raw(),
+                    0,
+                    self._protocol,
+                    self._total_len - self._ihl * 4
+                )
+            )
+            self._payload.build(frame=frame[self._ihl * 4:],
+                                phsum=sum(phdr.cast("I")))
+            return
+        self._payload.build(frame=frame[self._ihl * 4:])
 
 
     def __len__(self):
@@ -146,7 +162,7 @@ class IPBuilder:
             f"{' DF,' if self._flag_df else ''}"
             f" hlen {self._ihl * 4} bytes, "
             f'plen {self._total_len - self._ihl * 4} bytes'
-            f', options ({", ".join(f"{opt}(<ly>{len(opt)} bytes</>)" for opt in (self._options or []))})'
+            f', options ({", ".join(f"{opt}(<ly>{len(opt)} bytes)" for opt in (self._options or []))})'
         )
 
     @property
@@ -254,20 +270,6 @@ class IPFragBuilder:
     def get_frags(self):
         self._fragment()
         return self._frags
-
-
-
-    def ps_hdr_sum(self):
-        hdr = struct.pack(
-                '! 4s 4s B B H',
-                self._src.ip2raw(),
-                self._dst.ip2raw(),
-                0,
-                self._protocol,
-                self._total_len - self.__ihl*4
-            )
-
-        return sum(struct.unpack('!3L', hdr))
 
     def build(self, frame: memoryview):
         struct.pack_into(

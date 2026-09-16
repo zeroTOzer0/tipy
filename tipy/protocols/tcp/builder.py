@@ -64,8 +64,7 @@ class TCPBuilder:
                                     else (len(self._options) // 4) + TCP_DOFF
         self._tracker = Tracker(prefix='tx', echo_tracker=tracker)
 
-
-    def build(self, frame: memoryview, psum: int):
+    def build(self, frame: memoryview, phsum: int):
         data_offset = 20
         struct.pack_into(
             f'! H H L L H H H H',
@@ -100,9 +99,8 @@ class TCPBuilder:
             '! H',
             frame,
             16,
-            inet_csum(data=frame, pseudo_sum=psum)
+            inet_csum(data=frame, inited_sum=phsum)
         )
-
 
     def __len__(self):
         return self._doff * 4 + len(self._data)
@@ -123,17 +121,14 @@ class TCPBuilder:
             f", dlen {len(self._data)}"
         )
 
-
     @property
     def tracker(self):
         return self._tracker
 
     def to_bytes(self, ps_hdr_sum: int):
         frame = memoryview(bytearray(len(self)))
-        self.build(frame=frame, psum=ps_hdr_sum)
+        self.build(frame=frame, phsum=ps_hdr_sum)
         return bytes(frame)
-
-
 
 class TCPOptEOL:
     def __init__(self, count: int = 1):
