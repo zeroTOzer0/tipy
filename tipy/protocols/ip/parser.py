@@ -1,14 +1,13 @@
 from __future__ import annotations
 
+from functools import cached_property
 from struct import unpack_from
 
-from functools import cached_property
-
-from tipy.lib.csum import inet_csum
 from tipy.lib.ip_address import IPAddress
 from tipy.protocols.ip.ip import IP_PROTO
-from tipy.lib.logger import log
+
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from tipy.lib.packet import PacketRX
 
@@ -100,7 +99,7 @@ class IPParser:
         return bytes(self._frame[:self.ihl])
 
     def __len__(self):
-        return self.total_len
+        return self.ihl
 
     def __str__(self):
         return (
