@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from struct import unpack_from
 from functools import cached_property
+from struct import unpack_from
 
 from tipy.protocols.udp.udp import UDP_HEADER_LEN
 
@@ -48,9 +48,8 @@ class UDPParser:
     def header(self):
         return self._frame[:UDP_HEADER_LEN]
 
-
     def __str__(self) -> str:
         return f"UDP {self.src} > {self.dst}, len {self.len}"
 
     def __len__(self):
-        return len(self._frame)
+        return UDP_HEADER_LEN
