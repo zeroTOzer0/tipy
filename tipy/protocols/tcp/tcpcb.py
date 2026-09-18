@@ -66,11 +66,6 @@ class TCPCB:
         # buffers and offsets
         "rcv_buf",
         "snd_buf",
-        "rcv_w_buf_offset",
-        "rcv_r_buf_offset",
-        "snd_w_buf_offset",
-        "snd_r_buf_offset",
-        "snd_r_temp_buf_offset",
 
         # tcp segment helpers
         "tcp_data_start",
