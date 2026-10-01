@@ -1,5 +1,4 @@
 import sys
-from typing import Callable
 
 def inet_csum_little(data: memoryview, inited_sum: int=0):
     """
@@ -22,20 +21,24 @@ def inet_csum_little(data: memoryview, inited_sum: int=0):
     n = len(data)
     i = 0
 
-    qwords = n // 8
+    dwords = n // 8
     # Sum all full 64-bit words at once
-    s += sum(data[:qwords * 8].cast("Q"))
+    s += sum(data[:dwords * 8].cast("Q"))
 
-    i += (qwords * 8)
+    i += (dwords * 8)
 
-    # Sum all full remaining 16-bit words at once
+    # Process any remaining complete 16-bit word first.
+    # If no full word remains, skip this step so the final byte is
+    # handled only once by the padding step below.
     hwords = (n - i) // 2
-    s += sum(data[i:i+hwords * 2].cast("H"))
-    i += hwords * 2
+    if hwords:
+        # Sum all full remaining 16-bit words at once
+        s += sum(data[i:i+hwords * 2].cast("H"))
+        i += hwords * 2
 
     # If there is a leftover single byte, pad it
-    if n % 2:
-        s += (data[-1] << 8)
+    if i < n:
+        s += data[-1]
 
     # Fold 32-bit/64-bit sum into 16-bit by adding carries
     while s >> 16:
@@ -67,20 +70,24 @@ def inet_csum_big(data: memoryview, inited_sum: int=0):
     n = len(data)
     i = 0
 
-    qwords = n // 8
+    dwords = n // 8
 
     # Sum all full 64-bit words at once
-    s += sum(data[:qwords * 8].cast("Q"))
-    i += (qwords * 8)
+    s += sum(data[:dwords * 8].cast("Q"))
+    i += (dwords * 8)
 
-    # Sum all full remaining 16-bit words at once
+    # Process any remaining complete 16-bit word first.
+    # If no full word remains, skip this step so the final byte is
+    # handled only once by the padding step below.
     hwords = (n - i) // 2
-    s += sum(data[i:i + hwords * 2].cast("H"))
-    i += hwords * 2
+    if hwords:
+        # Sum all full remaining 16-bit words at once
+        s += sum(data[i:i + hwords * 2].cast("H"))
+        i += hwords * 2
 
     # If there is a leftover single byte, pad it
-    if n % 2:
-        s += (data[-1] << 8)
+    if i < n:
+        s += data[-1]
 
     # Fold 32-bit/64-bit sum into 16-bit by adding carries
     while s >> 16:
@@ -89,6 +96,6 @@ def inet_csum_big(data: memoryview, inited_sum: int=0):
     return ~s & 0xFFFF
 
 if sys.byteorder == 'little':
-    inet_csum: Callable[[memoryview, int], int] = inet_csum_little
+    inet_csum = inet_csum_little
 else:
-    inet_csum: Callable[[memoryview, int], int] = inet_csum_big
+    inet_csum = inet_csum_big
