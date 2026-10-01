@@ -146,7 +146,7 @@ class TCPParser:
             f"{"S" if self.syn else "-"}"
             f"{"F," if self.fin else "-,"}"
             f" window {self.window}, seq {self.seq}, ack {self.ack_seq}, "
-            f"dlen {self.dlen}"
+            f"hlen {self.doff}, dlen {self.dlen}"
         )
 
 

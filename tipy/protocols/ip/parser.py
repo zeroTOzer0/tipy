@@ -110,7 +110,7 @@ class IPParser:
             f"{' MF,' if self.flag_mf else ''}"
             f" offset {self.offset}, "
             f"hlen {self.ihl} bytes, "
-            f'plen {self.dlen} bytes'
+            f'dlen {self.dlen} bytes'
         )
 
 

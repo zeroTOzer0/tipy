@@ -49,7 +49,7 @@ class UDPParser:
         return self._frame[:UDP_HEADER_LEN]
 
     def __str__(self) -> str:
-        return f"UDP {self.src} > {self.dst}, len {self.len}"
+        return f"UDP {self.src} > {self.dst}, dlen {self.dlen}"
 
     def __len__(self):
         return UDP_HEADER_LEN
