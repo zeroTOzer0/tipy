@@ -38,6 +38,7 @@ class TCPSocket(Socket):
         self.type = SOCK_STREAM
         self.proto = proto
 
+        self.timeout: int | None = None
 
 
     def bind(self, address: tuple[str, int]):
@@ -103,8 +104,8 @@ class TCPSocket(Socket):
         data = tcp_recv(self=stack.core, so=self, bufsize=bufsize)
         return  b''.join(_.tobytes() for _ in data)
 
-    def settimeout(self, t):
-        ...
+    def settimeout(self, t: int):
+        self.timeout = t
 
     def raise_exception(self):
         so_error[self.error](self)

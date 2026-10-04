@@ -161,9 +161,11 @@ def tcp_recv(*, self: Core, so: TCPSocket, bufsize: int) -> list[memoryview]:
     # check if there is no data in rcv_buf
     if tcpcb.rcv_buf.is_empty():
         with tcpcb.recv_events:
-            tcpcb.recv_events.wait()
+            got_data = tcpcb.recv_events.wait(so.timeout)
 
-    so.raise_exception()
+    if not got_data:
+        so.error = Errno.ETIMEDOUT
+        so.raise_exception()
 
     if __debug__:
         available = tcpcb.rcv_buf.free_space()
