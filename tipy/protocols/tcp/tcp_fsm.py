@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from time import monotonic_ns
+from time import monotonic_ns, monotonic
 from struct import pack
 
 from tipy.lib.errno import Errno
@@ -14,7 +14,11 @@ from tipy.protocols.tcp.tcp_seq import (
     last_seq
 )
 
-from tipy.protocols.tcp.tcpcb import remove_tcpcb
+from tipy.protocols.tcp.tcpcb import (
+    remove_tcpcb,
+    MAX_TCP_CHALLENGE_ACK_LIMIT,
+    TCP_CHALLENGE_ACK_RATE_HZ
+)
 from tipy.lib.socket import SOL_SOCKET, SO_LINGER
 from tipy.protocols.tcp.builder import TCPOptMSS
 from tipy.protocols.tcp.tcp_timer import (
@@ -106,6 +110,46 @@ def _rtt_sample(tcpcb: TCPCB):
         tcpcb.rtt = (monotonic_ns() / 1_000_000_000) - tcpcb.rtt
         set_new_rto(tcpcb=tcpcb)
 
+def _send_challenge_ack(tcpcb: TCPCB):
+    """
+    Send a pure ACK as a challenge during bogus events.
+    This function enforces a rate limit on challenge ACKs, allowing only a
+    restricted number of ACKs per 1sec. If the rate limit is exceeded,
+    the transmission is skipped.
+    """
+    now_ns = monotonic_ns()
+    elapsed_sec = (now_ns - tcpcb.last_challenge_ack_timestamp) // 1_000_000_000
+
+    if elapsed_sec > 0:
+        tcpcb.challenge_ack_limit = min(
+            MAX_TCP_CHALLENGE_ACK_LIMIT,
+            tcpcb.challenge_ack_limit + TCP_CHALLENGE_ACK_RATE_HZ * elapsed_sec # new tokens
+        )
+
+        tcpcb.last_challenge_ack_timestamp = now_ns
+
+    if tcpcb.challenge_ack_limit <= 0:
+        return
+
+    tcpcb.core.tx_tcp(
+        local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
+        local_port=tcpcb.lp, remote_port=tcpcb.rp,
+        seq=tcpcb.snd_nxt, ack_seq=tcpcb.rcv_nxt,
+        ack=True,
+        window=tcpcb.rcv_wnd,
+    )
+
+    tcpcb.challenge_ack_limit -= 1
+
+    if __debug__:
+        until_next_ms = 1 if tcpcb.challenge_ack_limit == 0 else 0
+        log(
+            "tcpcb",
+            f"sent challenge ACK. "
+            f"remaining pool: {tcpcb.challenge_ack_limit}/{MAX_TCP_CHALLENGE_ACK_LIMIT}, "
+            f"next refill in: ~{until_next_ms}sec"
+        )
+
 def _send_ack(tcpcb: TCPCB):
     """
     Send an ACK-only TCP segment (no payload).
@@ -129,7 +173,6 @@ def _send_fin(tcpcb: TCPCB, next_state: STATES|None):
     On initial send, the TCP state is transitioned to `next_state`.
     A retransmission timer is started when a FIN segment is sent or resent
     """
-
     if tcpcb.sent_fin:
         # check if this is a retransmission
         if seq_gt(tcpcb.snd_max, tcpcb.snd_nxt):
@@ -162,7 +205,6 @@ def _send_fin(tcpcb: TCPCB, next_state: STATES|None):
         window=tcpcb.rcv_wnd,
     )
 
-
     tcpcb.snd_nxt = (
         (tcpcb.snd_nxt + 1) & 0xFF_FF_FF_FF
     )
@@ -186,7 +228,6 @@ def _drop_with_reset(tcpcb: TCPCB, packet_rx: PacketRX):
     """
     Drop with RST. Challenge by seq if ACK set, else challenge by ack.
     """
-
     if packet_rx.tcp.ack:
         tcpcb.core.tx_tcp(
             local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
@@ -213,11 +254,11 @@ def _h_rx_ack(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     Affect the SND.UNA variable
     Returns number of sequence numbers acked
     """
-
     # The following two conditions separate the formula:
     # SND.UNA < SEG.ACK =< SND.NXT into two parts
     # The first condition is : SND.UNA < SEG.ACK
     # The second condition is : SEG.ACK =< SND.NXT
+
     if seq_leq(packet_rx.tcp.ack_seq, tcpcb.snd_una) \
     or seq_gt(packet_rx.tcp.ack_seq, tcpcb.snd_nxt):
         if __debug__:
@@ -299,7 +340,6 @@ def _h_rx_seq_zlen_zwnd(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     Returns TCP_ACCEPT_AND_HANDLE if segment is acceptable
     TCP_DROP otherwise.
     """
-
     if __debug__:
         seq = packet_rx.tcp.seq
         accept = (seq == tcpcb.rcv_nxt)
@@ -324,7 +364,6 @@ def _h_rx_seq_zlen(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     Returns TCP_ACCEPT_AND_HANDLE if segment is acceptable,
     TCP_DROP otherwise.
     """
-
     if __debug__:
         seq = packet_rx.tcp.seq
 
@@ -355,7 +394,6 @@ def _h_rx_seq_zwnd(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     NEVER acceptable. Receiver just drop.
     Returns TCP_DROP unconditionally.
     """
-
     if __debug__:
         length = packet_rx.tcp.dlen + packet_rx.tcp.fin + packet_rx.tcp.syn
         log(
@@ -448,7 +486,6 @@ def _h_rx_seq_check(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     Used by connection closing states where only segment acceptability
     needs to be determined.
     """
-
     # NOTE:
     # FreeBSD accepts ACK-only segments in some closing states without
     # validating SEG.SEQ (validate only when RST exists), while Linux requires the sequence number to be
@@ -556,7 +593,6 @@ def _h_active_close_tx(tcpcb: TCPCB, close_requested: bool) -> bool:
     Handle tx path when an active close invoked.
     Returns True if connection aborted (RST sent), False if normal closure can proceed.
     """
-
     if close_requested \
     and tcpcb.sock_opt.get((SOL_SOCKET, SO_LINGER), None) == _SO_LINGER_ON:
         stop_all_timers(tcpcb=tcpcb)
@@ -573,7 +609,6 @@ def _h_active_close_rx(tcpcb: TCPCB, packet_rx: PacketRX) -> bool:
     Returns False if graceful closure can continue.
     True if RST was sent and connection aborted.
     """
-
     with tcpcb.tcpcb_lock:
         close_req = tcpcb.close_requested
         shut_req = tcpcb.shutdown_requested
@@ -610,9 +645,11 @@ def _rollback_to_una(tcpcb: TCPCB):
 
 def _compute_rcv_wnd(tcpcb: TCPCB) -> None:
     """
-    Compute new rcv_wnd and advance rcv_adv if needed
+    Update rcv_wnd and advance rcv_adv when necessary.
+    In the RX path, call this function only if the rx_state handler
+    does not schedule any TX/RTX events (e.g., when it only sends an ACK).
+    Otherwise, call it from the corresponding tx_state handler.
     """
-
     rcv_buf_free_space = tcpcb.rcv_buf.free_space()
     # set our new local window
     tcpcb.rcv_wnd = rcv_buf_free_space
@@ -621,7 +658,6 @@ def _compute_rcv_wnd(tcpcb: TCPCB) -> None:
     new_rcv_adv = (rcv_buf_free_space + tcpcb.rcv_nxt) & 0xFF_FF_FF_FF
     if seq_gt(new_rcv_adv, tcpcb.rcv_adv):
         tcpcb.rcv_adv = new_rcv_adv
-
 
 def _generate_segment_payload(buf: list[memoryview], n: int) -> memoryview:
     """
@@ -667,7 +703,6 @@ def _tx_loop(*,
     If `shutdown_requested` or `close_requested` is set, a FIN is sent
     after the last data segment.
     """
-
     dlen = (
         len(data[0]) +
         (len(data[1]) if len(data) == 2 else 0)
@@ -740,10 +775,6 @@ def _append_rcv_data(tcpcb: TCPCB, packet_rx: PacketRX) -> int:
     Append incoming segment payload to the rcv_buf.
     Notifies the application (socket.recv()) when data is ready.
     """
-    # NOTE: do not hold tcpcb lock when calling this function.
-    # Lock is only used to snapshot rcv offsets; copy to rcv_buf happens unlocked
-    # to avoid holding the lock during memory operations.
-
     _compute_rcv_wnd(tcpcb=tcpcb)
 
     if tcpcb.rcv_wnd == 0:
@@ -829,7 +860,7 @@ def _activ_open(tcpcb: TCPCB):
 
 def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
     """
-    Handle received segment when the TCP on the SYN_SENT State
+    Handle incoming segments in the SYN-SENT state.
     """
     if packet_rx.tcp.rst\
     and _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx) > 0:
@@ -940,8 +971,9 @@ def _rx_syn_sent(tcpcb: TCPCB, packet_rx: PacketRX):
         _change_state(tcpcb=tcpcb, new=STATES.SYN_RECV)
 
 def _tx_syn_sent(tcpcb: TCPCB):
-    """ tx h for syn_sent """
-
+    """
+    Handle outgoing segments in the SYN-SENT state.
+    """
     # only retransmission invokes this routine
     tcpcb.core.tx_tcp(
         local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
@@ -958,8 +990,9 @@ def _tx_syn_sent(tcpcb: TCPCB):
     start_rtx_timer(tcpcb=tcpcb)
 
 def _rx_syn_recv(tcpcb: TCPCB, packet_rx: PacketRX):
-    """rx h for syn recv"""
-
+    """
+    Handle incoming segments in the SYN-RECV state.
+    """
     # NOTE: LISTEN is not implemented yet.
     # SYN-RECV is reachable only through simultaneous open.
 
@@ -1010,7 +1043,9 @@ def _rx_syn_recv(tcpcb: TCPCB, packet_rx: PacketRX):
         return
 
 def _tx_syn_recv(tcpcb: TCPCB):
-    """ tx h for syn recv state """
+    """
+    Handle outgoing segments in the SYN-RECV state.
+    """
     tcpcb.core.tx_tcp(
         local_ip=tcpcb.lip, remote_ip=tcpcb.rip,
         local_port=tcpcb.lp, remote_port=tcpcb.rp,
@@ -1027,18 +1062,22 @@ def _tx_syn_recv(tcpcb: TCPCB):
 
 def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
     """
-    Handle received segment when the TCP on the ESTAB State
+    Handle incoming segments in the ESTAB state.
     """
-    if packet_rx.tcp.dlen > 0\
-    or packet_rx.tcp.fin:
-        tcpcb.ack_now = True
-
     accept_seg = _h_rx_seq(tcpcb=tcpcb, packet_rx=packet_rx)
 
     if accept_seg == TCP_ACCEPT_AND_HANDLE:
         if _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx, errno=Errno.ECONNRESET):
             _signal_rst(tcpcb=tcpcb)
             return
+
+        if packet_rx.tcp.syn:
+            _send_challenge_ack(tcpcb=tcpcb)
+            return
+
+        if packet_rx.tcp.dlen > 0 \
+        or packet_rx.tcp.fin:
+            tcpcb.ack_now = True
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
 
@@ -1094,16 +1133,13 @@ def _rx_estab(tcpcb: TCPCB, packet_rx: PacketRX):
         return
 
     if accept_seg == TCP_DROP:
-        tcpcb.ack_now = True
-        tcpcb.core.tcp_events_schedule.schedule_event(
-            event=TCPEvent(
-                type_=TCPEventType.SEND,
-                tcpcb=tcpcb
-            )
-        )
+        _send_challenge_ack(tcpcb=tcpcb)
         return
 
 def _tx_estab(tcpcb: TCPCB):
+    """
+    Handle outgoing segments in the ESTAB state.
+    """
     data = _drain_snd_buf(tcpcb=tcpcb)
 
     with tcpcb.tcpcb_lock:
@@ -1137,7 +1173,9 @@ def _tx_estab(tcpcb: TCPCB):
              close_requested=close_req)
 
 def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
-    """rx h for fin-wait-1"""
+    """
+    Handle incoming segments in the FIN-WAIT-1 state.
+    """
     # This state is entered when the application invokes close/shutdown.
     # At this point, no further data will be queued in snd_buf, so there is
     # no need to schedule any send event. We only send ACK segments.
@@ -1145,10 +1183,6 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
     # are handled by the TX routine for this state.
     # NOTE: FIN already sent; skip RTO calculation so the rtx could
     # Back off RTO if the peer doesn't ACK it.
-
-    if packet_rx.tcp.dlen\
-    or packet_rx.tcp.fin:
-        tcpcb.ack_now = True
 
     accept_seg = _h_rx_seq(tcpcb=tcpcb, packet_rx=packet_rx)
     if accept_seg == TCP_ACCEPT_AND_HANDLE:
@@ -1159,6 +1193,14 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
         ):
             _signal_rst(tcpcb=tcpcb)
             return
+
+        if packet_rx.tcp.syn:
+            _send_challenge_ack(tcpcb=tcpcb)
+            return
+
+        if packet_rx.tcp.dlen \
+        or packet_rx.tcp.fin:
+            tcpcb.ack_now = True
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
 
@@ -1200,17 +1242,18 @@ def _rx_fin_wait_1(tcpcb: TCPCB, packet_rx: PacketRX):
 
     if accept_seg == TCP_ACCEPT_BUT_BUFFER:
         # OOO is not supported yet
-        if tcpcb.ack_now:
-            _send_ack(tcpcb=tcpcb)
+        _send_ack(tcpcb=tcpcb)
         return
 
     if accept_seg == TCP_DROP:
-        if tcpcb.ack_now:
-            _send_ack(tcpcb=tcpcb)
+        _send_challenge_ack(tcpcb=tcpcb)
         return
 
 
 def _tx_fin_wait_1(tcpcb: TCPCB):
+    """
+    Handle outgoing segments in the FIN-WAIT-1 state.
+    """
     # NOTE: The RX routine for this state does not schedule TX events.
     # Therefore, this routine is only expected to run for retransmissions
     # (e.g., retransmitting the outstanding FIN or DATA+FIN segment).
@@ -1245,11 +1288,9 @@ def _tx_fin_wait_1(tcpcb: TCPCB):
     )
 
 def _rx_fin_wait_2(tcpcb: TCPCB, packet_rx: PacketRX):
-    """ rx h for fin w 2 """
-    if packet_rx.tcp.dlen > 0\
-    or packet_rx.tcp.fin:
-        tcpcb.ack_now = True
-
+    """
+    Handle incoming segments in the FIN-WAIT-2 state.
+    """
     accept_seq = _h_rx_seq(tcpcb=tcpcb, packet_rx=packet_rx)
     if accept_seq == TCP_ACCEPT_AND_HANDLE:
 
@@ -1259,6 +1300,14 @@ def _rx_fin_wait_2(tcpcb: TCPCB, packet_rx: PacketRX):
         ):
             _signal_rst(tcpcb=tcpcb)
             return
+
+        if packet_rx.tcp.syn:
+            _send_challenge_ack(tcpcb=tcpcb)
+            return
+
+        if packet_rx.tcp.dlen > 0 \
+        or packet_rx.tcp.fin:
+            tcpcb.ack_now = True
 
         _compute_rcv_wnd(tcpcb=tcpcb)
 
@@ -1282,12 +1331,13 @@ def _rx_fin_wait_2(tcpcb: TCPCB, packet_rx: PacketRX):
         return
 
     if accept_seq == TCP_DROP:
-        _send_ack(tcpcb=tcpcb)
+        _send_challenge_ack(tcpcb=tcpcb)
         return
 
 def _tx_fin_wait_2(tcpcb: TCPCB):
-    """tx h for fin w 2"""
-
+    """
+    Handle outgoing segments in the FIN-WAIT-2 state.
+    """
     # This TX handler does not generate ACKs; ACK processing is done in the RX path.
     # In FIN-WAIT-2, the local FIN has already been acknowledged and no application
     # data remains to be sent. This function only checks for a late close request
@@ -1299,8 +1349,9 @@ def _tx_fin_wait_2(tcpcb: TCPCB):
     _h_active_close_tx(tcpcb=tcpcb, close_requested=close_req)
 
 def _rx_closing(tcpcb: TCPCB, packet_rx: PacketRX):
-    """ rx h for closing """
-
+    """
+    Handle incoming segments in the CLOSING state.
+    """
     # NOTE: This state indicates the peer has initiated connection termination.
     # Any incoming segment with data (SEG.LEN > 0) is ignored for processing purposes.
     # FIN handling does not alter state progression here.
@@ -1314,6 +1365,10 @@ def _rx_closing(tcpcb: TCPCB, packet_rx: PacketRX):
             or _h_active_close_rx(tcpcb=tcpcb, packet_rx=packet_rx)
         ):
             _signal_rst(tcpcb=tcpcb)
+            return
+
+        if packet_rx.tcp.syn:
+            _send_challenge_ack(tcpcb=tcpcb)
             return
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -1340,8 +1395,9 @@ def _rx_closing(tcpcb: TCPCB, packet_rx: PacketRX):
     _send_ack(tcpcb=tcpcb)
 
 def _tx_closing(tcpcb: TCPCB):
-    """ tx h for closing """
-
+    """
+    Handle outgoing segments in the CLOSING state.
+    """
     # NOTE: In this state, we are waiting for an ACK from the peer
     # to acknowledge our FIN. The RX routine for this state handles
     # the ACK reception and state transition, while this routine
@@ -1374,10 +1430,10 @@ def _tx_closing(tcpcb: TCPCB):
         close_requested=False
     )
 
-
 def _rx_close_wait(tcpcb: TCPCB, packet_rx: PacketRX):
-    """ rx h for close w """
-
+    """
+    Handle incoming segments in the CLOSE-WAIT state.
+    """
     # NOTE: This state indicates the peer has initiated connection termination.
     # Any incoming segment with data (SEG.LEN > 0) is ignored for processing purposes.
     # FIN handling does not alter state progression here.
@@ -1390,6 +1446,10 @@ def _rx_close_wait(tcpcb: TCPCB, packet_rx: PacketRX):
             or _h_active_close_rx(tcpcb=tcpcb, packet_rx=packet_rx)
         ):
             _signal_rst(tcpcb=tcpcb)
+            return
+
+        if packet_rx.tcp.syn:
+            _send_challenge_ack(tcpcb=tcpcb)
             return
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -1420,8 +1480,9 @@ def _rx_close_wait(tcpcb: TCPCB, packet_rx: PacketRX):
     )
 
 def _tx_close_wait(tcpcb: TCPCB):
-    """ tx h for close w """
-
+    """
+    Handle outgoing segments in the CLOSE-WAIT state.
+    """
     with tcpcb.tcpcb_lock:
 
         shutdown_req = tcpcb.shutdown_requested
@@ -1460,12 +1521,17 @@ def _tx_close_wait(tcpcb: TCPCB):
 
 
 def _rx_last_ack(tcpcb: TCPCB, packet_rx: PacketRX):
-    """ rx h for last ack """
-
+    """
+    Handle incoming segments in the LAST-ACK state.
+    """
     if _h_rx_seq_check(tcpcb=tcpcb, packet_rx=packet_rx) == TCP_ACCEPT_AND_HANDLE:
 
         if _h_rx_rst(tcpcb=tcpcb, packet_rx=packet_rx, errno=Errno.ECONNRESET):
             _signal_rst(tcpcb=tcpcb)
+            return
+
+        if packet_rx.tcp.syn:
+            _send_challenge_ack(tcpcb=tcpcb)
             return
 
         seq_acked = _h_rx_ack(tcpcb=tcpcb, packet_rx=packet_rx)
@@ -1490,14 +1556,13 @@ def _rx_last_ack(tcpcb: TCPCB, packet_rx: PacketRX):
         _h_rx_wnd(tcpcb=tcpcb, packet_rx=packet_rx)
 
 def _tx_last_ack(tcpcb: TCPCB):
-    """ tx h for last ack """
+    """
+    Handle outgoing segments in the LAST-ACK state.
+    """
     # NOTE: this routine invoked only by rtx timer
     # when our FIN or data+FIN not acked yet
     # NOTE2: sins we reach this state, so a graceful close
     # can be happened.
-
-    with tcpcb.tcpcb_lock:
-        close_req = tcpcb.close_requested
 
     data = _drain_snd_buf(tcpcb=tcpcb)
 
@@ -1516,8 +1581,9 @@ def _tx_last_ack(tcpcb: TCPCB):
     )
 
 def _rx_time_wait(tcpcb: TCPCB, packet_rx: PacketRX):
-    """ rx h for time wait """
-
+    """
+    Handle incoming segments in the TINE-WAIT state.
+    """
     if packet_rx.tcp.fin:
         _send_ack(tcpcb=tcpcb)
         stop_time_wait_timer(tcpcb=tcpcb)

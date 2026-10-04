@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from time import monotonic_ns
 from threading import RLock
 from random import randint
 
@@ -22,6 +23,8 @@ DEFAULT_SEND_BUFF    =   0xFFFF
 
 DEFAULT_RCV_WND      =   0xFFFF
 
+MAX_TCP_CHALLENGE_ACK_LIMIT = 100
+TCP_CHALLENGE_ACK_RATE_HZ = 5
 
 def remove_tcpcb(tcpcb: TCPCB):
     """delete the tcpcb"""
@@ -102,6 +105,10 @@ class TCPCB:
         "rtt",
         "srtt",
         "rttvar",
+
+        # challenges
+        "challenge_ack_limit",
+        "last_challenge_ack_timestamp",
 
         # application requests
         "close_requested",
@@ -202,6 +209,10 @@ class TCPCB:
         self.rtt: float | None = None
         self.srtt: float | None = None
         self.rttvar: float | None = None
+
+        # tcp challenges
+        self.challenge_ack_limit: int = MAX_TCP_CHALLENGE_ACK_LIMIT
+        self.last_challenge_ack_timestamp: int = monotonic_ns() # ns
 
         # Application requested connection close/shutdown.
         self.close_requested: bool = False
