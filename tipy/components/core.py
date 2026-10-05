@@ -12,9 +12,9 @@ from tipy.config.config import (
 
 from tipy.lib.logger import log
 
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 
-from tipy.lib.mac_address import MACAddress
+from tipy.lib.ethernet import MACAddress
 
 from tipy.components.timer import Timer
 from tipy.components.tx_ring import TXRing
@@ -105,15 +105,15 @@ class Core:
         self.rip: RIPTable = RIPTable()
 
         self.arp_cache: ARPCache = ARPCache(core=self)
-        self.ip_cache: IPCache = IPCache()
+        self.ip_cache: IPCache = IPCache(core=self)
 
         self.iface: int | None = None
 
 
-        self.conflict_ips: list = []
+        self.conflict_ips: list[IPAddress] = []
 
         if IP_STATIC:
-            self.unicast_ip: IPAddress
+            self.unicast_ip: IPAddress | None = None
             self.broadcast_ip: IPAddress = IPAddress(IP_BROADCAST_ADDRESS)
             self.multicast_ip: list[IPAddress] = []
             self.router: IPAddress = IPAddress(ROUTER)
@@ -158,7 +158,6 @@ class Core:
 
         self._acquire_ipaddr(IP_ADDRESS)
 
-
     def stop_stack(self):
         self.tx_ring.shutdown()
         self.rx_ring.shutdown()
@@ -170,7 +169,7 @@ class Core:
             self,
             sha=self.unicast_mac,
             spa=IPAddress(0),
-            tha=MACAddress(b'\x00'*6),
+            tha=MACAddress(0),
             tpa=IPAddress(ipaddr),
             op=1,
             prob=True

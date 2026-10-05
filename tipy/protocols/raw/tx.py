@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import TYPE_CHECKING
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 
 from tipy.protocols.raw.builder import RAWBuilder
 

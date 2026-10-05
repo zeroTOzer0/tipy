@@ -3,7 +3,7 @@ from __future__ import annotations
 from tipy.lib.logger import log
 from tipy.protocols.tcp.tcpcb import TCPCB
 from tipy.lib.errno import Errno, GaiError
-from tipy.lib.ip_address import IPAddress, IPFormatError
+from tipy.lib.inet import IPAddress, IPFormatError
 from tipy.protocols.tcp.tcp import NON_RECEIVABLE_STATES
 from tipy.protocols.tcp.tcp import TCPEvent, TCPEventType
 
@@ -32,17 +32,17 @@ def tcp_bind(*, self: Core, so: TCPSocket, address: tuple[str, int]):
 
     so.local_port = address[1]
 
-    if self.tcp.check_bound((so.local_ip.ip_address,
+    if self.tcp.check_bound((so.local_ip.ip,
                                    so.local_port)):
         so.error = Errno.EADDRINUSE
         so.raise_exception()
 
     so.sock_id = (
-        so.local_ip.ip_address, so.local_port,
-        so.remote_ip.ip_address, so.remote_port
+        so.local_ip.ip, so.local_port,
+        so.remote_ip.ip, so.remote_port
     )
     self.tcp.register_socket(so.sock_id, so)
-    self.tcp.register_bound_socket((so.local_ip.ip_address,
+    self.tcp.register_bound_socket((so.local_ip.ip,
                                           so.local_port))
 
 def tcp_connect(*, self: Core, so: TCPSocket, address: tuple[str, int]):
@@ -60,20 +60,20 @@ def tcp_connect(*, self: Core, so: TCPSocket, address: tuple[str, int]):
         so.local_ip = self.unicast_ip
 
         so.sock_id = (
-            so.local_ip.ip_address, so.local_port,
-            so.remote_ip.ip_address, so.remote_port
+            so.local_ip.ip, so.local_port,
+            so.remote_ip.ip, so.remote_port
         )
 
         self.tcp.register_socket(so.sock_id, so)
 
     else:
         so.sock_id = (
-            so.local_ip.ip_address, so.local_port,
-            so.remote_ip.ip_address, so.remote_port
+            so.local_ip.ip, so.local_port,
+            so.remote_ip.ip, so.remote_port
         )
 
         self.tcp.update_socket(
-            (so.local_ip.ip_address, so.local_port, '0.0.0.0', 0),
+            (so.local_ip.ip, so.local_port, 0, 0),
             so.sock_id,
             so
         )
@@ -163,9 +163,9 @@ def tcp_recv(*, self: Core, so: TCPSocket, bufsize: int) -> list[memoryview]:
         with tcpcb.recv_events:
             got_data = tcpcb.recv_events.wait(so.timeout)
 
-    if not got_data:
-        so.error = Errno.ETIMEDOUT
-        so.raise_exception()
+        if not got_data:
+            so.error = Errno.ETIMEDOUT
+            so.raise_exception()
 
     if __debug__:
         available = tcpcb.rcv_buf.free_space()

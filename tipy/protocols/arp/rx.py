@@ -6,8 +6,8 @@ from tipy.lib.logger import log
 from tipy.protocols.arp.parser import ARPParser
 from tipy.protocols.arp.arp import ARP_OP_REPLY, ARP_OP_REQUEST
 
-from tipy.lib.mac_address import MACAddress
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.ethernet import MACAddress
+from tipy.lib.inet import IPAddress
 
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
@@ -25,46 +25,46 @@ def rx_arp(self: Core, packet_rx: PacketRX):
     if packet_rx.arp.op == ARP_OP_REPLY:
 
         # check if this replay destined to me based on dst ether mac address
-        if packet_rx.ether.dst.raw2mac() == MAC_ADDRESS:
+        if packet_rx.ether.dst.mac == self.unicast_mac.mac:
 
             # If there was a pending normal ARP request for this IP
             if self.arp_cache.arp_wait_test(
-                packet_rx.arp.spa.raw2ip()
+                packet_rx.arp.spa
             ):
 
                 self.arp_cache.update_arp_cache(
-                    packet_rx.arp.spa.raw2ip(),
-                    packet_rx.arp.sha.raw2mac()
+                    packet_rx.arp.spa,
+                    packet_rx.arp.sha
                 )
 
                 # Schedule automatic ARP cache entry removal after TTL expires.
                 self.timer.schedule_timer(
                     expire_after=ARP_CACHE_TTL,
                     remove_at_execute=True,
-                    call=lambda : self.arp_cache.flush_entry(ip_address=packet_rx.arp.spa.raw2ip()),
+                    call=lambda : self.arp_cache.flush_entry(ip_address=packet_rx.arp.spa),
                     timer_name="arp flush"
                 )
 
                 self.ip_cache.dequeue(
                     core=self,
-                    ip_address=str(packet_rx.arp.spa),
-                    mac_address=str(packet_rx.arp.sha)
+                    ip_address=packet_rx.arp.spa,
+                    mac_address=packet_rx.arp.sha
                 )
                 return
 
             # If this IP was being probed via ARP probe
             if self.arp_cache.arp_probe_test(
-                packet_rx.arp.spa.raw2ip()
+                packet_rx.arp.spa
             ):
                 with self.arp_cache.arp_prob_cond:
                     if __debug__:
                         log(
                             "arp",
-                            f"probe response: {packet_rx.arp.spa.raw2ip()} in use",
+                            f"probe response: {packet_rx.arp.spa} in use",
                             level="INFO"
                         )
                     # Mark conflict and notify stack core
-                    self.conflict_ips.append(packet_rx.arp.spa.raw2ip())
+                    self.conflict_ips.append(packet_rx.arp.spa)
                     self.arp_cache.arp_prob_cond.notify()
                 return
 
@@ -82,13 +82,13 @@ def rx_arp(self: Core, packet_rx: PacketRX):
                 level="WARN"
             )
 
-    if packet_rx.arp.op == ARP_OP_REQUEST:
+    if self.unicast_ip and packet_rx.arp.op == ARP_OP_REQUEST:
         # check if the destined ip is me based on
         # tpa field, send arp rep
-        if packet_rx.arp.tpa.raw2ip() == IP_ADDRESS:
+        if packet_rx.arp.tpa.ip == self.unicast_ip.ip:
             self.tx_arp(
-                sha=MACAddress(MAC_ADDRESS),
-                spa=IPAddress(IP_ADDRESS),
+                sha=self.unicast_mac,
+                spa=self.unicast_ip,
                 tha=packet_rx.ether.src,
                 tpa=packet_rx.arp.spa,
                 op=ARP_OP_REPLY,
@@ -96,6 +96,6 @@ def rx_arp(self: Core, packet_rx: PacketRX):
             )
             # update arp cache
             self.arp_cache.update_arp_cache(
-                packet_rx.arp.spa.raw2ip(),
-                packet_rx.ether.src.raw2mac()
+                packet_rx.arp.spa,
+                packet_rx.ether.src
             )

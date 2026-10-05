@@ -5,8 +5,8 @@ from random import randint
 from tipy.lib.logger import log
 from tipy.protocols.ip.builder import IPBuilder, IPFragBuilder, IPOptBuilder, IPOptEOL, IPOptLSRR
 from tipy.config.config import MAC_ADDRESS
-from tipy.lib.mac_address import MACAddress
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.ethernet import MACAddress
+from tipy.lib.inet import IPAddress
 from tipy.config.config import MTU
 from tipy.lib.socket import (
         IPPROTO_IP,          # sock_opt -> level
@@ -28,33 +28,28 @@ if TYPE_CHECKING:
 
     from tipy.components.core import Core
 
-
-
 def _h_unresolved_mac_datagrams(self: Core,
                                 src: IPAddress,
                                 dst: IPAddress,
                                 datagram: IPBuilder | IPFragBuilder):
 
     # Check if pending datagram queue is empty (no previous item)
-    if not self.ip_cache.is_enqueued(str(dst)):
+    if not self.ip_cache.is_enqueued(ip_address=dst):
         # send arp request
         self.tx_arp(
-            sha=MACAddress(MAC_ADDRESS),
+            sha=self.unicast_mac,
             spa=src,
-            tha=MACAddress(b'\x00'*6),
+            tha=MACAddress(0),
             tpa=dst,
             op=1,
         )
 
     # enqueue this datagram temporarily in a pending queue
-    return self.ip_cache.enqueue(dst.ip_address, datagram)
+    return self.ip_cache.enqueue(ip_address=dst, datagram=datagram)
 
 def _prep_ip_options(opts: bytes) -> list[IPOptLSRR |IPOptNOP |IPOptEOL]:
     opt_buff = bytearray(opts)
     return IPOptBuilder(opt_buff).build()
-
-
-
 
 def tx_ip(self: Core,
           payload: UDPBuilder
@@ -85,13 +80,12 @@ def tx_ip(self: Core,
                                         sock_opt[(IPPROTO_IP, IPPROTO_OPTIONS)]
                                       )
 
-
-    if dst.is_broadcast():
-        mac_address = b'\xff\xff\xff\xff\xff\xff'
+    if dst.is_broadcast:
+        mac_address = MACAddress(0xFF_FF_FF_FF_FF_FF)
 
     # check for the route inside/outside
     elif dst.is_in_subnet(self.network, self.mask):
-        mac_address = self.arp_cache.find_entry(dst.ip_address)
+        mac_address = self.arp_cache.find_entry(ip_address=dst)
         if __debug__: log(
             'ip',
             f'found route to {dst} inside our network '
@@ -99,18 +93,18 @@ def tx_ip(self: Core,
             level='INFO'
         )
     else:
-        mac_address = self.arp_cache.find_entry(self.router.ip_address)
+        mac_address = self.arp_cache.find_entry(ip_address=self.router)
         _tpa = self.router
         if __debug__: log(
             'ip',
             f'found route to {dst} outside our network, use'
-            f'{self.router} to reach {dst.ip_address}',
+            f'{self.router} to reach {dst}',
             level='INFO'
         )
 
     ip_builder: IPBuilder = IPBuilder(
         payload=payload,
-        id=randint(0x0001, 0xffff),
+        id_=randint(0x0001, 0xffff),
         protocol=protocol,
         src=src,
         dst=dst,
@@ -129,9 +123,9 @@ def tx_ip(self: Core,
         if mac_address:
             return self.tx_ether(
                 payload=ip_builder,
-                dst=MACAddress(mac_address),
-                src=MACAddress(MAC_ADDRESS),
-                type=0x0800
+                dst=mac_address,
+                src=self.unicast_mac,
+                type_=0x0800
             )
         return _h_unresolved_mac_datagrams(self, src, _tpa, ip_builder)
 
@@ -147,7 +141,7 @@ def tx_ip(self: Core,
 
     frags: list[IPFragBuilder] = IPFragBuilder(
         payload=payload,
-        id=randint(0x0001, 0xffff),
+        id_=randint(0x0001, 0xffff),
         protocol=protocol,
         src=src,
         dst=dst,
@@ -156,26 +150,26 @@ def tx_ip(self: Core,
     ).get_frags()
 
     # check if we have resolved mac from dst ip
-    mac_address = self.arp_cache.find_entry(dst.ip_address)
+    mac_address = self.arp_cache.find_entry(ip_address=dst)
     if mac_address:
         for frag in frags:
             if __debug__: log(
                 'ip',
-                f'{frag.tracker} - ' # No tracker, cuz high layer converted to byte object
+                f'{frag.tracker} - ' # No tracker, because high layer converted to byte object
                 f'IP {frag}'
             )
             self.tx_ether(
                 payload=frag,
-                dst=MACAddress(mac_address),
-                src=MACAddress(MAC_ADDRESS),
-                type=0x0800
+                dst=mac_address,
+                src=self.unicast_mac,
+                type_=0x0800
             )
         return
 
     for frag in frags:
         if __debug__: log(
             'ip',
-            f'{frag.tracker} - ' # No tracker, cuz high layer converted to byte object
+            f'{frag.tracker} - ' # No tracker, because high layer converted to byte object
             f'IP {frag}'
         )
         _h_unresolved_mac_datagrams(self, src, dst, frag)

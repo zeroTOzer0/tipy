@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 from tipy.lib.logger import log
 from enum import IntEnum
 

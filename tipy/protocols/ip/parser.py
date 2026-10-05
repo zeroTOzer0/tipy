@@ -3,7 +3,7 @@ from __future__ import annotations
 from functools import cached_property
 from struct import unpack_from
 
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 from tipy.protocols.ip.ip import IP_PROTO
 
 from typing import TYPE_CHECKING
@@ -30,7 +30,7 @@ class IPParser:
     @cached_property
     def tos(self):
         # Ignored
-        ...
+        return
 
     @cached_property
     def total_len(self) -> int:
@@ -44,11 +44,9 @@ class IPParser:
     def flags_fragoff(self):
         return unpack_from('!H', self._frame, 6)[0]
 
-
     @cached_property
     def flag_df(self) -> bool:
         return bool(self.flags_fragoff & 0x4000)
-
 
     @property
     def flag_mf(self) -> bool:
@@ -72,17 +70,17 @@ class IPParser:
         return unpack_from('!H', self._frame, 10)[0]
 
     @cached_property
-    def src(self) -> str:
-        return IPAddress(self._frame[12:16]).raw2ip()
+    def src(self) -> IPAddress:
+        return IPAddress(unpack_from("!I", self._frame[12:16])[0])
 
     @cached_property
-    def dst(self) -> str:
-        return IPAddress(self._frame[16:20]).raw2ip()
+    def dst(self) -> IPAddress:
+        return IPAddress(unpack_from("!I", self._frame[16:20])[0])
 
     @cached_property
     def options(self):
         # Ignored
-        ...
+        return
 
     @cached_property
     def dlen(self):
@@ -109,8 +107,8 @@ class IPParser:
             f"{' DF,' if self.flag_df else ''}"
             f"{' MF,' if self.flag_mf else ''}"
             f" offset {self.offset}, "
-            f"hlen {self.ihl} bytes, "
-            f'dlen {self.dlen} bytes'
+            f"hlen {self.ihl}, "
+            f'dlen {self.dlen}'
         )
 
 

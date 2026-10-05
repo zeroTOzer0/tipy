@@ -7,7 +7,7 @@ SOCK_STREAM
 from tipy.lib.errno import so_error
 
 from tipy.lib import stack
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 from tipy.lib.logger import log
 from threading import Condition
 
@@ -30,8 +30,8 @@ class TCPSocket(Socket):
         self.close_events: Condition = Condition()
 
         self.sock_id: tuple = (
-            self.local_ip.ip_address, self.local_port,
-            self.remote_ip.ip_address, self.remote_port
+            self.local_ip.ip, self.local_port,
+            self.remote_ip.ip, self.remote_port
         )
 
         self.family = family
@@ -61,8 +61,6 @@ class TCPSocket(Socket):
                 f"{self} connect to {self.remote_ip}:{self.remote_port}",
                 level="INFO"
             )
-
-
 
     def close(self):
         if __debug__:

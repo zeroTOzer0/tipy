@@ -13,7 +13,7 @@ from tipy.protocols.icmp.icmp import (
         REASSEMBLY_TIME_EXCEEDED
     )
 from tipy.lib.packet import PacketRX
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -34,9 +34,9 @@ def _icmp_proto_unreach(self: Core, packet_rx: PacketRX):
     send icmp protocol unreachable messages
     """
     self.tx_icmp(
-        src=IPAddress(packet_rx.ip.dst),
-        dst=IPAddress(packet_rx.ip.src),
-        type=DESTINATION_UNREACHABLE,
+        src=packet_rx.ip.dst,
+        dst=packet_rx.ip.src,
+        type_=DESTINATION_UNREACHABLE,
         code=PROTOCOL_UNREACHABLE,
         data=packet_rx.ip.header + packet_rx.ip.data[:8]
     )
@@ -47,9 +47,9 @@ def _icmp_defragment_exceeded(self: Core, packet_rx: PacketRX):
     type 11 code 1
     """
     self.tx_icmp(
-        src=IPAddress(packet_rx.ip.dst),
-        dst=IPAddress(packet_rx.ip.src),
-        type=TIME_EXCEEDED,
+        src=packet_rx.ip.dst,
+        dst=packet_rx.ip.src,
+        type_=TIME_EXCEEDED,
         code=REASSEMBLY_TIME_EXCEEDED,
         data=packet_rx.ip.header + packet_rx.ip.data[:8]
     )
@@ -60,9 +60,9 @@ def _icmp_ttl_exceeded(self: Core, packet_rx: PacketRX):
     type 11 code 0
     """
     self.tx_icmp(
-        src=IPAddress(packet_rx.ip.dst),
-        dst=IPAddress(packet_rx.ip.src),
-        type=TIME_EXCEEDED,
+        src=packet_rx.ip.dst,
+        dst=packet_rx.ip.src,
+        type_=TIME_EXCEEDED,
         code=TTL_EXCEEDED,
         data=packet_rx.ip.header + packet_rx.ip.data[:8]
     )
@@ -102,7 +102,7 @@ def _dealloc_ip_reass_mem(self: Core, buffer_id):
 
 def _ip_reass_timer(self: Core,
                     packet_rx: PacketRX,
-                    buffer_id: tuple[str, str, int, int]):
+                    buffer_id: tuple[int, int, int, int]):
     """
     start new timer for the reassembly session
     used also to extend the timer delay by deleting
@@ -118,15 +118,23 @@ def _ip_reass_timer(self: Core,
     )
     self.ip_cache.fragments_cache[buffer_id]['timer'] = t
     if __debug__:
+        bf_id = (
+            IPAddress(buffer_id[0]),
+            IPAddress(buffer_id[1]),
+            f"id {buffer_id[3]}",
+            f"proto {buffer_id[2]}"
+        )
+
+
         log(
             "ip-reass",
-            f"IP reassembly started, buffer allocated (id={buffer_id})",
+            f"IP reassembly started, buffer allocated (id={bf_id})",
             level="DEBUG"
         )
 
 def _alloc_ip_reass_mem(self: Core,
                         packet_rx: PacketRX,
-                        buffer_id: tuple[str, str, int, int]):
+                        buffer_id: tuple[int, int, int, int]):
     """
     allocate ip reassembly memory resources
     """
@@ -147,8 +155,6 @@ def _alloc_ip_reass_mem(self: Core,
                 buffer_id=buffer_id
             )
 
-
-
 def _is_reassembled(last: bool, block_count: int, total_data_len: int):
     if last:
         if block_count == int ((total_data_len + 7) // 8):
@@ -161,11 +167,12 @@ def _is_reassembled(last: bool, block_count: int, total_data_len: int):
 def _ip_reass(self: Core,
               packet_rx: PacketRX):
 
-    buffer_id: tuple[str, str, int, int] = (packet_rx.ip.src,
-                        packet_rx.ip.dst,
-                        packet_rx.ip.id,
-                        packet_rx.ip.protocol
-                        )
+    buffer_id: tuple[int, int, int, int] = (
+        packet_rx.ip.src.ip,
+        packet_rx.ip.dst.ip,
+        packet_rx.ip.id,
+        packet_rx.ip.protocol
+    )
 
     # Create buffer-id if needed
     _alloc_ip_reass_mem(self, packet_rx, buffer_id)
@@ -226,7 +233,6 @@ def _ip_reass(self: Core,
                     reass_resources['total_data_len']
                 )
 
-
             # Check the defragmentation status, if True -> Defragmentation Done!
             if _is_reassembled(last=True,
                                block_count=reass_resources['block_count'],
@@ -277,8 +283,6 @@ def _ip_reass(self: Core,
                 packet_rx.ip.data
             )
 
-
-
             # Check the defragmentation status, if True -> Defragmentation Done!
             if _is_reassembled(last=True,
                                block_count=reass_resources['block_count'],
@@ -294,7 +298,6 @@ def _ip_reass(self: Core,
                 t: TimerTask = reass_resources['timer']
                 t.remove() # remove timer
                 _dealloc_ip_reass_mem(self, buffer_id)
-
 
                 return defragmented_ip
 
@@ -325,7 +328,6 @@ def _ip_reass(self: Core,
                 packet_rx=packet_rx,
                 buffer_id=buffer_id
             )
-
 
         return False
 
@@ -381,17 +383,16 @@ def rx_ip(self: Core, packet_rx: PacketRX):
 
     #TODO(ip): add proper multicast/broadcast handling in IP input path
     # Current limitation: only unicast packets destined to this host are accepted
-
-    if IPAddress(packet_rx.ip.src).is_broadcast()\
-            or IPAddress(packet_rx.ip.src).is_multicast()\
-               or packet_rx.ip.dst != str(self.unicast_ip):
+    if packet_rx.ip.src.is_broadcast\
+    or packet_rx.ip.src.is_multicast\
+    or packet_rx.ip.dst.ip != self.unicast_ip.ip:
 
         if __debug__:
             log(
                 "ip",
                 f"{packet_rx.tracker} packet dropped (not unicast to host): "
                 f"{packet_rx.ip.src} -> {packet_rx.ip.dst}",
-                level="WARN"
+                level="INFO"
             )
         return
 
@@ -414,7 +415,10 @@ def rx_ip(self: Core, packet_rx: PacketRX):
         if next_layer:
             return next_layer(self, packet_rx)
 
-        rip_sock = self.rip.sockets.get((packet_rx.ip.dst, packet_rx.ip.protocol, packet_rx.ip.src), None)
+        rip_sock = self.rip.sockets.get(
+            (packet_rx.ip.dst.ip,packet_rx.ip.protocol, packet_rx.ip.src.ip),
+            None
+        )
         if rip_sock is None:
             return _icmp_proto_unreach(
                 self=self,
@@ -442,7 +446,10 @@ def rx_ip(self: Core, packet_rx: PacketRX):
         if next_layer:
             return next_layer(self, packet_rx)
 
-        rip_sock = self.rip.sockets.get((packet_rx.ip.dst, packet_rx.ip.protocol, packet_rx.ip.src), None)
+        rip_sock = self.rip.sockets.get(
+            (packet_rx.ip.dst.ip, packet_rx.ip.protocol, packet_rx.ip.src.ip),
+            None
+        )
         if rip_sock is None:
             return _icmp_proto_unreach(
                 self=self,

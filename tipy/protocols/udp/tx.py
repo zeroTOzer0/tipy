@@ -1,5 +1,5 @@
 from __future__ import annotations
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 from tipy.protocols.udp.builder import UDPBuilder
 from typing import TYPE_CHECKING
 from tipy.lib.logger import log

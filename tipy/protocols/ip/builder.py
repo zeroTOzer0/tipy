@@ -5,7 +5,7 @@ import struct
 from tipy.config.config import  MTU
 from tipy.lib.csum import inet_csum
 from tipy.lib.tracker import Tracker
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 from tipy.protocols.icmp.rx import IP_PROTO_TCP, IP_PROTO_UDP
 from tipy.protocols.ip.ip import (
     IP_TTL,
@@ -45,7 +45,7 @@ class IPBuilder:
     def __init__(self,
                  *,
                  payload: RAWBuilder | UDPBuilder | ICMPBuilder,
-                 id: int,
+                 id_: int,
                  ttl: int = IP_TTL,
                  protocol: int = 255,
                  offset: int = 0,
@@ -62,7 +62,7 @@ class IPBuilder:
 
         self._payload = payload
         self._payload_length: int = len(self._payload)
-        self._id: int = id
+        self._id: int = id_
         self._offset: int = offset
         self._flag_df: bool = flag_df
         self._flag_mf: bool = flag_mf
@@ -83,28 +83,26 @@ class IPBuilder:
         self._src: IPAddress = src
         self._dst: IPAddress = dst
 
-
     def psum(self):
         """
-        pseudo header sum
+        pseudo header sum, currently used when the UDP get fragmented
         """
-        psum = struct.pack(
-                '! 4s 4s B B H',
-                self._src.ip2raw(),
-                self._dst.ip2raw(),
+        psum = memoryview(
+            struct.pack(
+                '! I I B B H',
+                self._src.ip,
+                self._dst.ip,
                 0,
                 self._protocol,
                 self._total_len - self._ihl * 4
                 )
-
-        return sum(
-            struct.unpack('=3L', psum)
         )
+        return sum(psum.cast("I"))
 
     def build(self, frame: memoryview):
 
         struct.pack_into(
-            '! B B H H H B B H 4s 4s',
+            '! B B H H H B B H I I',
             frame,
             0,
             self._version << 4 | self._ihl,
@@ -115,8 +113,8 @@ class IPBuilder:
             self._ttl,
             self._protocol,
             self._checksum,
-            self._src.ip2raw(),
-            self._dst.ip2raw(),
+            self._src.ip,
+            self._dst.ip
         )
 
         if self._options:
@@ -137,9 +135,9 @@ class IPBuilder:
             # then pass it with native system byte order
             phdr = memoryview(
                 struct.pack(
-                    '! 4s 4s B B H',
-                    self._src.ip2raw(),
-                    self._dst.ip2raw(),
+                    '! I I B B H',
+                    self._src.ip,
+                    self._dst.ip,
                     0,
                     self._protocol,
                     self._total_len - self._ihl * 4
@@ -172,8 +170,8 @@ class IPBuilder:
 class IPFragBuilder:
     def __init__(self,
                  *,
-                 payload: bytes, # bytes needed, because of fragmentation
-                 id: int,
+                 payload: bytes,  # bytes needed, because of fragmentation
+                 id_: int,
                  ttl: int = IP_TTL,
                  protocol: int = 255,
                  offset: int = 0,
@@ -187,13 +185,13 @@ class IPFragBuilder:
                               |IPOptUnknown
                               ] | None = None,
                  tracker: Tracker | None=None,
-                ):
+                 ):
 
         self._tracker = Tracker(prefix='tx', echo_tracker=tracker)
 
         self._payload = payload
 
-        self._id: int = id
+        self._id: int = id_
         self._offset: int = offset
         self._flag_df: bool = flag_df
         self._flag_mf: bool = flag_mf
@@ -254,7 +252,7 @@ class IPFragBuilder:
     def _create_frags(self, data_portion, offset, flag_mf, options):
         frag = IPFragBuilder(
             payload=data_portion,
-            id=self._id,
+            id_=self._id,
             ttl=self._ttl,
             protocol=self._protocol,
             offset=offset,
@@ -273,7 +271,7 @@ class IPFragBuilder:
 
     def build(self, frame: memoryview):
         struct.pack_into(
-            '! B B H H H B B H 4s 4s',
+            '! B B H H H B B H I I',
             frame,
             0,
             self._version << 4 | self.__ihl,
@@ -284,8 +282,8 @@ class IPFragBuilder:
             self._ttl,
             self._protocol,
             self._checksum,
-            self._src.ip2raw(),
-            self._dst.ip2raw(),
+            self._src.ip,
+            self._dst.ip
         )
         if self._options:
             offset = 20
@@ -313,7 +311,6 @@ class IPFragBuilder:
     def tracker(self):
         return self._tracker
 
-
     def __len__(self):
         return self.__ihl*4 + len(self._payload)
 
@@ -329,7 +326,6 @@ class IPFragBuilder:
             f'plen {self._total_len - self._ihl*4} bytes' #plen -> payload
             f', options ({", ".join(f"{opt}(<ly>{len(opt)} bytes</>)" for opt in (self._options or []))})'
         )
-
 
 class IPOptEOL:
     """ type : 0 """
@@ -422,8 +418,6 @@ class IPOptBuilder:
          131 : (IPOptLSRR, True)
     }
 
-
-
     def __init__(self, raw_opts: bytearray|None):
         self._raw_opts: bytearray = raw_opts
         self._opts: list = []
@@ -435,10 +429,10 @@ class IPOptBuilder:
             # log buff overflow
             return None
 
-        self.__parse()
+        self._parse()
         return self._opts
 
-    def __parse(self):
+    def _parse(self):
         ptr = 0
         raw_opt_len = len(self._raw_opts)
         while ptr < raw_opt_len:

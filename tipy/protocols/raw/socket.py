@@ -1,5 +1,5 @@
 from tipy.lib.errno import Errno, so_error
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 from tipy.lib.logger import log
 from tipy.lib import stack
 
@@ -29,8 +29,8 @@ class RIPSocket(Socket):
 
         self.timeout: int | None = None
 
-        self.sock_id: tuple[str, int, str] = (
-            self.local_ip.ip_address, self.proto, self.remote_ip.ip_address
+        self.sock_id: tuple[int, int, int] = (
+            self.local_ip.ip, self.proto, self.remote_ip.ip
         )
 
     def __str__(self):

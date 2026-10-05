@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from tipy.lib.logger import log
-from tipy.lib.ip_address import IPAddress
-from tipy.lib.mac_address import MACAddress
+from tipy.lib.inet import IPAddress
+from tipy.lib.ethernet import MACAddress
 from tipy.protocols.arp.builder import ARPBuilder
+from tipy.protocols.arp.arp import ARP_OP_REPLY, ARP_OP_REQUEST
 
 from typing import TYPE_CHECKING
 
@@ -30,13 +31,10 @@ def tx_arp(self: Core,
         echo_tracker=tracker
     )
 
-    # must do conditions her because arp-req need to
-    # add Zeros in tha, so we can't use it in dst arg in ptx_ether
-
-    if op == 1:
+    if op == ARP_OP_REQUEST:
         # if this an arp prob
         if prob:
-            self.arp_cache.arp_probe_add(str(tpa))
+            self.arp_cache.arp_probe_add(tpa)
             if __debug__: log(
                 'arp',
                 f'{arp_builder.tracker} - '
@@ -45,7 +43,7 @@ def tx_arp(self: Core,
 
         # if this is a normal arp request
         else:
-            self.arp_cache.arp_wait_add(str(tpa))
+            self.arp_cache.arp_wait_add(tpa)
             if __debug__: log(
                 'arp',
                 f'{arp_builder.tracker} - '
@@ -54,12 +52,12 @@ def tx_arp(self: Core,
 
         return self.tx_ether(
             payload=arp_builder,
-            dst=MACAddress(b'\xff'*6),
+            dst=MACAddress(0xFF_FF_FF_FF_FF_FF),
             src=sha,
-            type=0x0806
+            type_=0x0806
         )
 
-    if op == 2:
+    if op == ARP_OP_REPLY:
         if __debug__: log(
             'arp',
             f'{arp_builder.tracker} - '
@@ -70,7 +68,7 @@ def tx_arp(self: Core,
             payload=arp_builder,
             dst=tha,
             src=sha,
-            type=0x0806
+            type_=0x0806
         )
     return
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tipy.lib.errno import Errno, GaiError
-from tipy.lib.ip_address import IPAddress, IPFormatError
+from tipy.lib.inet import IPAddress, IPFormatError
 
 from typing import TYPE_CHECKING
 
@@ -30,17 +30,17 @@ def udp_bind(*, self: Core, so: UDPSocket, address: tuple[str, int]):
 
     so.local_port = address[1]
 
-    if self.udp.check_bound((so.local_ip.ip_address,
+    if self.udp.check_bound((so.local_ip.ip,
                                    so.local_port)):
         so.error = Errno.EADDRINUSE
         so.raise_exception()
 
     so.sock_id = (
-        so.local_ip.ip_address, so.local_port,
-        so.remote_ip.ip_address, so.remote_port
+        so.local_ip.ip, so.local_port,
+        so.remote_ip.ip, so.remote_port
     )
     self.udp.register_socket(so.sock_id, so)
-    self.udp.register_bound_socket((so.local_ip.ip_address,
+    self.udp.register_bound_socket((so.local_ip.ip,
                                           so.local_port))
 
 
@@ -59,20 +59,20 @@ def udp_connect(*, self: Core, so: UDPSocket, address: tuple[str, int]):
         so.local_ip = self.unicast_ip
 
         so.sock_id = (
-            so.local_ip.ip_address, so.local_port,
-            so.remote_ip.ip_address, so.remote_port
+            so.local_ip.ip, so.local_port,
+            so.remote_ip.ip, so.remote_port
         )
 
         self.udp.register_socket(so.sock_id, so)
         return
 
     so.sock_id = (
-        so.local_ip.ip_address, so.local_port,
-        so.remote_ip.ip_address, so.remote_port
+        so.local_ip.ip, so.local_port,
+        so.remote_ip.ip, so.remote_port
     )
 
     self.udp.update_socket(
-        (so.local_ip.ip_address, so.local_port, '0.0.0.0', 0 ),
+        (so.local_ip.ip, so.local_port, 0, 0),
         so.sock_id,
         so
     )
@@ -86,10 +86,9 @@ def udp_close(*, self: Core, so: UDPSocket):
 
 
 def udp_send(*, self: Core, so: UDPSocket, data: bytes):
-
     # sins no support yet for sendto/recvfrom calls
     # check if the socket is connected type (we use connect call)
-    if so.remote_ip.ip_address != '0.0.0.0' and so.remote_port:
+    if so.remote_ip.ip != 0 and so.remote_port:
         # check if there is an icmp err msg
         if so.sock_id in self.udp.err_msg:
             so.error = self.udp.err_msg[so.sock_id]

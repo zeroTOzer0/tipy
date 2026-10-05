@@ -1,8 +1,8 @@
 import struct
 
 from tipy.protocols.arp.arp import  ARP_OP_REQUEST, ARP_HEADER_LEN, ARP_OP_REPLY
-from tipy.lib.mac_address import MACAddress
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.ethernet import MACAddress
+from tipy.lib.inet import IPAddress
 from tipy.lib.tracker import Tracker
 
 class ARPBuilder:
@@ -26,7 +26,7 @@ class ARPBuilder:
 
     def build(self, frame: memoryview):
         struct.pack_into(
-            '! H H B B H 6s 4s 6s 4s',
+            '! H H B B H I H I I H I',
             frame,
             0,
             1,
@@ -34,13 +34,14 @@ class ARPBuilder:
             6,
             4,
             self._op,
-            self._sha.mac2raw(),
-            self._spa.ip2raw(),
-            self._tha.mac2raw(),
-            self._tpa.ip2raw()
+            self._sha.mac_high,
+            self._sha.mac_low,
+            self._spa.ip,
+            self._tha.mac_high,
+            self._tha.mac_low,
+            self._tpa.ip
 
         )
-
 
     @property
     def tracker(self):

@@ -3,7 +3,6 @@ from __future__ import annotations
 from struct import pack
 
 from tipy.protocols.udp.parser import UDPParser
-from tipy.lib.ip_address import IPAddress
 from tipy.lib.csum import inet_csum
 from tipy.lib.logger import log
 
@@ -12,6 +11,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tipy.components.core import Core
     from tipy.lib.packet import PacketRX
+    from tipy.lib.inet import IPAddress
 
 def rx_udp(self: Core, packet_rx: PacketRX):
     """
@@ -47,9 +47,9 @@ def rx_udp(self: Core, packet_rx: PacketRX):
     # then pass it with native system byte order
     phdr = memoryview(
         pack(
-            '! 4s 4s B B H',
-            IPAddress(src_ip).ip2raw(),
-            IPAddress(dst_ip).ip2raw(),
+            '! I I B B H',
+            src_ip.ip,
+            dst_ip.ip,
             0,
             packet_rx.ip.protocol,
             len(packet_rx.udp)
@@ -66,8 +66,8 @@ def rx_udp(self: Core, packet_rx: PacketRX):
         return
 
     sock_id: tuple = (
-        packet_rx.ip.dst, packet_rx.udp.dst,
-        packet_rx.ip.src, packet_rx.udp.src
+        dst_ip.ip, packet_rx.udp.dst,
+        src_ip.ip, packet_rx.udp.src
     )
 
     if sock_id in self.udp.sockets:
@@ -81,30 +81,25 @@ def rx_udp(self: Core, packet_rx: PacketRX):
 
         return
 
-    # TODO:
+    #TODO:
     # In server case, only "bind" call is used.
     # So remote ip/port could be anything (0.0.0.0:0).
     # Here, if exact sock_id is not in udp_socket table,
     # try again with wildcard sock_id:
-            # sock_id_wild: tuple = (
-            #     packet_rx.ip.dst, packet_rx.udp.dport,
-            #     '0.0.0.0', 0
-            # )
-            # return
 
     # send type3 code3: port unreachable;
     if __debug__:
         log(
             "icmp",
             f"{packet_rx.tracker} port unreachable: "
-            f"{packet_rx.ip.src}:{packet_rx.udp.src}"
-            f" -> {packet_rx.ip.dst}:{packet_rx.udp.dst}",
+            f"{src_ip}:{packet_rx.udp.src}"
+            f" -> {dst_ip}:{packet_rx.udp.dst}",
             level="INFO"
         )
     self.tx_icmp(
-        src=IPAddress(packet_rx.ip.dst),
-        dst=IPAddress(packet_rx.ip.src),
-        type=3,
+        src=dst_ip,
+        dst=src_ip,
+        type_=3,
         code=3,
         data=packet_rx.ip.header + packet_rx.ip.data[:8],
         tracker=packet_rx.tracker

@@ -4,7 +4,7 @@ from struct import pack
 
 from tipy.protocols.tcp.tcp import TCPEvent, TCPEventType
 from tipy.protocols.tcp.parser import TCPParser
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 from tipy.lib.csum import inet_csum
 from tipy.lib.logger import log
 
@@ -49,9 +49,9 @@ def rx_tcp(self: Core, packet_rx: PacketRX):
     # then pass it with native system byte order
     phdr = memoryview(
             pack(
-                '! 4s 4s B B H',
-                IPAddress(src_ip).ip2raw(),
-                IPAddress(dst_ip).ip2raw(),
+                '! I I B B H',
+                src_ip.ip,
+                dst_ip.ip,
                 0,
                 packet_rx.ip.protocol,
                 l
@@ -68,8 +68,8 @@ def rx_tcp(self: Core, packet_rx: PacketRX):
         return
 
     sock_id: tuple = (
-        dst_ip, packet_rx.tcp.dst,
-        src_ip, packet_rx.tcp.src
+        dst_ip.ip, packet_rx.tcp.dst,
+        src_ip.ip, packet_rx.tcp.src
     )
 
     if sock_id in self.tcp.sockets:
@@ -97,8 +97,8 @@ def rx_tcp(self: Core, packet_rx: PacketRX):
     if packet_rx.tcp.ack:
 
         self.tx_tcp(
-            local_ip=IPAddress(packet_rx.ip.dst), local_port=packet_rx.tcp.dst,
-            remote_ip=IPAddress(packet_rx.ip.src), remote_port=packet_rx.tcp.src,
+            local_ip=dst_ip, local_port=packet_rx.tcp.dst,
+            remote_ip=src_ip, remote_port=packet_rx.tcp.src,
             seq=packet_rx.tcp.ack_seq, ack_seq=0,
             rst=True,
             window=0
@@ -109,9 +109,10 @@ def rx_tcp(self: Core, packet_rx: PacketRX):
                + packet_rx.tcp.dlen
                + packet_rx.tcp.syn
                + packet_rx.tcp.fin) & 0xFF_FF_FF_FF
+
     self.tx_tcp(
-        local_ip=IPAddress(packet_rx.ip.dst), local_port=packet_rx.tcp.dst,
-        remote_ip=IPAddress(packet_rx.ip.src), remote_port=packet_rx.tcp.src,
+        local_ip=dst_ip, local_port=packet_rx.tcp.dst,
+        remote_ip=src_ip, remote_port=packet_rx.tcp.src,
         seq=0, ack_seq=ack_seq,
         rst=True, ack=True,
         window=0

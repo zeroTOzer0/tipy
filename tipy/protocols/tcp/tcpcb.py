@@ -6,7 +6,7 @@ from random import randint
 
 from tipy.lib.buffer import RingBuffer, RRingBuffer
 from tipy.protocols.tcp.tcp import STATES
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 
 
 from typing import TYPE_CHECKING, Any
@@ -143,9 +143,9 @@ class TCPCB:
         self.rip: IPAddress = remote_ip
         self.rp: int = remote_port
 
-        self.socket_id: tuple = (self.lip.ip_address,
+        self.socket_id: tuple = (self.lip.ip,
                                   self.lp,
-                                  self.rip.ip_address,
+                                  self.rip.ip,
                                   self.rp)
         self.so: Socket = so
 

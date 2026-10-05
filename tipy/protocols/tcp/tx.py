@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from tipy.lib.logger import log
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 from tipy.protocols.tcp.builder import TCPBuilder, TCPOptBuilder
 
 from typing import TYPE_CHECKING

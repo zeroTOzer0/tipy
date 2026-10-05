@@ -1,9 +1,8 @@
 from __future__ import annotations
 
-import struct
+from struct import unpack_from
 
 from tipy.protocols.icmp.parser import ICMPParser
-from tipy.lib.ip_address import IPAddress
 from tipy.lib.csum import inet_csum
 from tipy.lib.errno import Errno
 from tipy.lib.logger import log
@@ -22,6 +21,7 @@ from typing import TYPE_CHECKING, Callable
 if TYPE_CHECKING:
     from tipy.components.core import Core
     from tipy.lib.packet import PacketRX
+    from tipy.lib.inet import IPAddress
 
 
 IP_PROTO_UDP = 17
@@ -33,14 +33,14 @@ def _h_icmp_dest_unreach_port(self: Core, packet_rx: PacketRX):
     """
     frame = packet_rx.icmp.err_data
     ip_ihl: int = (frame[0] & 0xF) * 4
-    src_ip = IPAddress(frame[12:16]).raw2ip()
-    dst_ip = IPAddress(frame[16:20]).raw2ip()
+    src_ip = IPAddress(unpack_from("!I", frame[12:16])[0])
+    dst_ip = IPAddress(unpack_from("!I", frame[16:20])[0])
     protocol = frame[9]
-    sock_id: tuple[str, int, str, int] = (
-        src_ip,  # local host
-        struct.unpack('! H', frame[ip_ihl:ip_ihl + 2])[0],  # local port
-        dst_ip,  # remote host
-        struct.unpack('! H', frame[ip_ihl + 2:ip_ihl + 4])[0],  # remote port
+    sock_id: tuple[int, int, int, int] = (
+        src_ip.ip,  # local host
+        unpack_from('! H', frame[ip_ihl:ip_ihl + 2])[0],  # local port
+        dst_ip.ip,  # remote host
+        unpack_from('! H', frame[ip_ihl + 2:ip_ihl + 4])[0] # remote port
     )
 
     if protocol == IP_PROTO_UDP:
@@ -56,7 +56,7 @@ def _h_icmp_dest_unreach_port(self: Core, packet_rx: PacketRX):
         log(
             "icmp",
             f"destination unreachable (port): {sock_id}",
-            level="WARN"
+            level="INFO"
         )
 
 def _h_icmp_dest_unreach_proto(self: Core, packet_rx: PacketRX):
@@ -65,14 +65,14 @@ def _h_icmp_dest_unreach_proto(self: Core, packet_rx: PacketRX):
     """
     frame = packet_rx.icmp.err_data
     ip_ihl: int = (frame[0] & 0xF) * 4
-    src_ip = IPAddress(frame[12:16]).raw2ip()
-    dst_ip = IPAddress(frame[16:20]).raw2ip()
+    src_ip = IPAddress(unpack_from("!I", frame[12:16])[0])
+    dst_ip = IPAddress(unpack_from("!I", frame[16:20])[0])
     protocol = frame[9]
-    sock_id: tuple[str, int, str, int] = (
-        src_ip,  # local host
-        struct.unpack('! H', frame[ip_ihl:ip_ihl + 2])[0],  # local port
-        dst_ip,  # remote host
-        struct.unpack('! H', frame[ip_ihl + 2:ip_ihl + 4])[0],  # remote port
+    sock_id: tuple[int, int, int, int] = (
+        src_ip.ip,  # local host
+        unpack_from('! H', frame[ip_ihl:ip_ihl + 2])[0],  # local port
+        dst_ip.ip,  # remote host
+        unpack_from('! H', frame[ip_ihl + 2:ip_ihl + 4])[0]  # remote port
     )
 
     if protocol == IP_PROTO_UDP:
@@ -102,9 +102,9 @@ def _h_icmp_echo_req(self: Core, packet_rx: PacketRX):
         )
 
     self.tx_icmp(
-        src=IPAddress(packet_rx.ip.dst),
-        dst=IPAddress(packet_rx.ip.src),
-        type=ECHO_REPLY,
+        src=packet_rx.ip.dst,
+        dst=packet_rx.ip.src,
+        type_=ECHO_REPLY,
         code=ECHO_REQ_REP,
         data=packet_rx.icmp.echo_data,
         echo_id=packet_rx.icmp.echo_id,
@@ -125,9 +125,9 @@ def _h_icmp_echo_rep(self: Core, packet_rx: PacketRX):
         )
 
     rip_sock_id = (
-        packet_rx.ip.dst,
+        packet_rx.ip.dst.ip,
         packet_rx.ip.protocol,
-        packet_rx.ip.src
+        packet_rx.ip.src.ip
     )
     if rip_sock_id in self.rip.sockets:
         self.rip.sockets[rip_sock_id].get_data(packet_rx.icmp.data)

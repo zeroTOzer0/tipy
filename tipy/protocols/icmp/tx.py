@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from tipy.protocols.icmp.builder import ICMPBuilder
 from tipy.lib.logger import log
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from tipy.components.core import Core
@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 def tx_icmp(self: Core,
             src: IPAddress,
             dst: IPAddress,
-            type: int,
+            type_: int,
             code: int,
             data: bytes | None=None,
             echo_id: int|None=None,
@@ -22,7 +22,7 @@ def tx_icmp(self: Core,
             ):
 
     icmp_builder = ICMPBuilder(
-        type=type,
+        type=type_,
         code=code,
         data=data,
         echo_id=echo_id,

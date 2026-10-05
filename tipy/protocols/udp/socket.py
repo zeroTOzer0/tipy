@@ -1,4 +1,4 @@
-from tipy.lib.ip_address import IPAddress
+from tipy.lib.inet import IPAddress
 from tipy.lib.logger import log
 from tipy.lib import stack
 
@@ -32,9 +32,9 @@ class UDPSocket(Socket):
 
         self.timeout: int | None = None
 
-        self.sock_id: tuple = (
-            self.local_ip.ip_address, self.local_port,
-            self.remote_ip.ip_address, self.remote_port
+        self.sock_id: tuple[int, int, int, int] = (
+            self.local_ip.ip, self.local_port,
+            self.remote_ip.ip, self.remote_port
         )
 
     def bind(self, address: tuple[str, int]):

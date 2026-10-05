@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from tipy.lib.errno import Errno, GaiError
-from tipy.lib.ip_address import IPAddress, IPFormatError
+from tipy.lib.inet import IPAddress, IPFormatError
 
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from tipy.components.core import Core
     from tipy.protocols.raw.socket import RIPSocket
+
 
 
 def raw_bind(*, self: Core, so: RIPSocket, address: tuple[str, int]):
@@ -25,7 +26,7 @@ def raw_bind(*, self: Core, so: RIPSocket, address: tuple[str, int]):
     so.local_port = address[1]
 
     so.sock_id = (
-        so.local_ip.ip_address, so.proto, so.remote_ip.ip_address
+        so.local_ip.ip, so.proto, so.remote_ip.ip
     )
 
     self.rip.register_socket(so.sock_id, so)
@@ -40,21 +41,21 @@ def raw_connect(*, self: Core, so: RIPSocket, address: tuple[str, int]):
 
     so.remote_port = address[1]
 
-    if so.local_ip.ip_address == "0.0.0.0":
+    if so.local_ip.ip == 0:
         # just select the configured IP
         so.local_ip = self.unicast_ip
         so.sock_id = (
-            so.local_ip.ip_address, so.proto, so.remote_ip.ip_address
+            so.local_ip.ip, so.proto, so.remote_ip.ip
         )
         self.rip.register_socket(so.sock_id, so)
         return
 
     so.sock_id = (
-        so.local_ip.ip_address, so.proto, so.remote_ip.ip_address
+        so.local_ip.ip, so.proto, so.remote_ip.ip
     )
 
     self.rip.update_socket(
-        (so.local_ip.ip_address, so.proto, '0.0.0.0'),
+        (so.local_ip.ip, so.proto, 0),
         so.sock_id,
         so
     )
@@ -67,7 +68,7 @@ def raw_send(*, self: Core, so: RIPSocket, data: bytes) -> int:
 
     # sins no support yet for sendto/recvfrom calls
     # check if the socket is connected type (we use connect call)
-    if so.remote_ip.ip_address != '0.0.0.0':
+    if so.remote_ip.ip != 0:
 
         self.tx_raw(
             payload=data,

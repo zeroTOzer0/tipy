@@ -17,9 +17,9 @@ class UDPTable:
     def __init__(self):
         # Tuple format: (local_ip, local_port, remote_ip, remote_port)
         self.sockets: dict[tuple, UDPSocket] = dict()
-        self.bound_sockets: set[tuple[str, int]] = set()
+        self.bound_sockets: set[tuple[int, int]] = set()
         # when an icmp message received
-        self.err_msg: dict[tuple[str, int, str, int], Errno] = dict()
+        self.err_msg: dict[tuple[int, int, int, int], Errno] = dict()
         self.ephemeral_ports: set[int] = set(EPHEMERAL_PORTS)
         self.used_ports: set[int] = set()
 
@@ -33,33 +33,29 @@ class UDPTable:
     def remove_socket(self, sock_id: tuple):
         self.sockets.pop(sock_id, None)
 
-    def register_bound_socket(self, bnd_sock: tuple[str, int]):
-        self.bound_sockets.add(bnd_sock)
+    def register_bound_socket(self, bound_sock: tuple[int, int]):
+        self.bound_sockets.add(bound_sock)
 
 
-    def __add_used_port(self, port: int):
+    def _add_used_port(self, port: int):
         if port not in self.ephemeral_ports:
             self.used_ports.add(port)
 
     def pick_ephemeral_udp_port(self):
         picked_port = self.ephemeral_ports.pop()
-        self.__add_used_port(picked_port)
+        self._add_used_port(picked_port)
         return picked_port
 
-    def check_bound(self, bnd_sock: tuple[str, int]):
-        return bnd_sock in self.bound_sockets
-
-    def remove_socket(self,
-                          sock_id: tuple[str, int, str, int]):
-        self.sockets.pop(sock_id, None)
+    def check_bound(self, bound_sock: tuple[int, int]):
+        return bound_sock in self.bound_sockets
 
 
 class TCPTable:
     def __init__(self):
-        # Tuple format: (local_ip, local_port, remote_ip, remote_port)
+        # Tuple format: (int-local_ip, int-local_port, int-remote_ip, int-remote_port)
         self.sockets: dict[tuple, TCPSocket] = dict()
         self.tcpcbs: dict[tuple, TCPCB] = dict()
-        self.bound_sockets: set[tuple[str, int]] = set()
+        self.bound_sockets: set[tuple[int, int]] = set()
         self.ephemeral_ports: set[int] = set(EPHEMERAL_PORTS)
         self.used_ports: set[int] = set()
 
@@ -73,21 +69,20 @@ class TCPTable:
     def remove_socket(self, sock_id: tuple):
         self.sockets.pop(sock_id, None)
 
-    def register_bound_socket(self, bnd_sock: tuple[str, int]):
-        self.bound_sockets.add(bnd_sock)
+    def register_bound_socket(self, bound_sock: tuple[int, int]):
+        self.bound_sockets.add(bound_sock)
 
-
-    def __add_used_port(self, port: int):
+    def _add_used_port(self, port: int):
         if port not in self.ephemeral_ports:
             self.used_ports.add(port)
 
     def pick_ephemeral_tcp_port(self):
         picked_port = self.ephemeral_ports.pop()
-        self.__add_used_port(picked_port)
+        self._add_used_port(picked_port)
         return picked_port
 
-    def check_bound(self, bnd_sock: tuple[str, int]):
-        return bnd_sock in self.bound_sockets
+    def check_bound(self, bound_sock: tuple[int, int]):
+        return bound_sock in self.bound_sockets
 
     def register_tcpcb(self, sock_id: tuple, tcpcb: TCPCB):
         self.tcpcbs[sock_id] = tcpcb
@@ -98,21 +93,21 @@ class TCPTable:
 class RIPTable:
     """ table for : raw_ip (AF_INET/SOCK_RAW sockets) """
     def __init__(self):
-        # Tuple format: (local ip, protocol_number, remote ip)
-        self.sockets: dict[tuple[str, int, str], RIPSocket] = dict()
+        # Tuple format: (int-local ip, int-protocol_number, int-remote ip)
+        self.sockets: dict[tuple[int, int, int], RIPSocket] = dict()
 
     def register_socket(self,
-                        sock_id: tuple[str, int, str],
+                        sock_id: tuple[int, int, int],
                         socket: RIPSocket):
         self.sockets[sock_id] = socket
 
     def remove_socket(self,
-                    sock_id: tuple[str, int, str]):
+                    sock_id: tuple[int, int, int]):
 
         self.sockets.pop(sock_id, None)
 
-    def update_socket(self, old: tuple[str, int, str],
-                      new: tuple[str, int, str],
+    def update_socket(self, old: tuple[int, int, int],
+                      new: tuple[int, int, int],
                       socket: RIPSocket):
         self.remove_socket(old)
         self.register_socket(new, socket)

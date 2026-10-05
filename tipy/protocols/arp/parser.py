@@ -2,8 +2,8 @@ from struct import unpack_from
 from functools import cached_property
 
 from tipy.lib.packet import PacketRX
-from tipy.lib.ip_address import IPAddress
-from tipy.lib.mac_address import MACAddress
+from tipy.lib.inet import IPAddress
+from tipy.lib.ethernet import MACAddress
 from tipy.protocols.arp.arp import ARP_OP_REPLY, ARP_OP_REQUEST
 
 class ARPParser:
@@ -19,11 +19,9 @@ class ARPParser:
     def hwtype(self):
         return  unpack_from('! H', self._frame[0:2])[0]
 
-
     @cached_property
     def ptype(self):
         return  unpack_from('! H', self._frame[2:4])[0]
-
 
     @cached_property
     def hwlen(self):
@@ -39,21 +37,21 @@ class ARPParser:
 
     @cached_property
     def sha(self):
-        return MACAddress(bytes(self._frame[8:14]))
+        i, h = unpack_from('! I H', self._frame[8:14])
+        return MACAddress((i << 16) | h)
 
     @cached_property
     def spa(self):
-        return IPAddress(bytes(self._frame[14:18]))
+        return IPAddress(unpack_from('! I', self._frame[14:18])[0])
 
     @cached_property
     def tha(self):
-        return MACAddress(bytes(self._frame[18:24]))
+        i, h = unpack_from('! I H', self._frame[18:24])
+        return MACAddress((i << 16) | h)
 
     @cached_property
     def tpa(self):
-        return IPAddress(bytes(self._frame[24:28]))
-
-
+        return IPAddress(unpack_from('! I', self._frame[24:28])[0])
 
     def __str__(self):
         if self.op == ARP_OP_REPLY:

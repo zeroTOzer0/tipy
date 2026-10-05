@@ -15,10 +15,9 @@ def rx_ether(self: Core, packet_rx: PacketRX):
         f"{packet_rx.tracker} - "
         f'{packet_rx.ether}'
     )
-    # print(packet_rx.ether)
+
     packet_rx.frame = packet_rx.frame[14:]
 
-    # pass to next layer
     self.ether_protocol_map.get(
         packet_rx.ether.type,
         self.ether_protocol_map[None]
