@@ -130,7 +130,7 @@ def _h_icmp_echo_rep(self: Core, packet_rx: PacketRX):
         packet_rx.ip.src.ip
     )
     if rip_sock_id in self.rip.sockets:
-        self.rip.sockets[rip_sock_id].get_data(packet_rx.icmp.data)
+        self.rip.sockets[rip_sock_id].get_data(packet_rx.frame)
 
     #TODO: try the sock_id with zeros as the last item in the tuple
 
