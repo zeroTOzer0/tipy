@@ -51,7 +51,17 @@ class MACAddress:
         self._macadd_str: str = ''
 
         if isinstance(macadd, str):
+            # Reject MAC addresses that mix ':' and '-' separators.
+            if ":" in macadd and "-" in macadd:
+                raise MACFormatError
+
+            # Normalize '-' separators to ':'.
             macadd = macadd.replace("-", ":")
+
+            # A valid MAC address must contain exactly six octets.
+            if len(macadd.split(":")) != 6:
+                raise MACFormatError
+
             m = macadd.replace(":", "")
 
             if len(m) != 12:
