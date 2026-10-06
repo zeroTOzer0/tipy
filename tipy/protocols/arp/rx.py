@@ -15,6 +15,16 @@ if TYPE_CHECKING:
     from tipy.lib.packet import PacketRX
 
 def rx_arp(self: Core, packet_rx: PacketRX):
+
+    if len(packet_rx.frame) < 28:
+        if __debug__:
+            log(
+                'icmp',
+                f'[{packet_rx.tracker}] arp header too short',
+                "DEBUG"
+            )
+        return
+
     ARPParser(packet_rx=packet_rx)
     if __debug__: log(
         'arp',
