@@ -1,7 +1,5 @@
 # TODO
 
-## Missing Features
-
 ### Ethernet II
 
 - [ ] Multicast handling
