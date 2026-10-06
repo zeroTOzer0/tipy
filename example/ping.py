@@ -12,7 +12,7 @@ class Ping:
 
         self.remote_host = remote_host
 
-        self.sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IP_PROTO_ICMP)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_ICMP)
         self.sock.connect((self.remote_host, 0))
         self.sock.setsockopt(socket.IPPROTO_IP
                              , socket.IPPROTO_TTL,
@@ -132,7 +132,7 @@ stack = Tipy(ifname="tap7")
 try:
     stack.start()
     ping = Ping(args[1])
-    ping.ping(count=50000, interval=0.0000001)
+    ping.ping(count=50000, interval=1)
     ping.close()
     stack.stop()
 except KeyboardInterrupt:
