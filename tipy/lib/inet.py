@@ -59,6 +59,10 @@ class IPAddress:
                         and ip_octets[i].isdigit()):
                     raise IPFormatError
 
+                # Reject octets with leading zeros (e.g. "001" or "008").
+                if len(ip_octets[i]) > 1 and ip_octets[i].startswith("0"):
+                    raise IPFormatError
+
                 octet = int(ip_octets[i], 10)
 
                 if not (0x00 <= octet <= 0xFF):
