@@ -1,8 +1,9 @@
+import sys
 import struct
 
-from tipy.lib.csum import inet_csum
 from tipy.lib.inet import IPAddress
 from tipy.lib.socket import IPPROTO_TCP
+from tipy.lib.csum import inet_csum, inet_csum_big, inet_csum_little
 
 def test_inet_csum_ip_header():
     # ver=4, ihl=5, tos=0x0, len=46, id=1, flags=None,
@@ -96,4 +97,55 @@ def test_inet_csum_invalid_checksum():
     )
 
     assert inet_csum(data=ip_h) != 0
+
+def test_inet_csum_little():
+    # This test is intended to verify the checksum calculation as it would
+    # behave on a little-endian host.
+
+    # When run on a big-endian host, memoryview.cast() reads the data using
+    # the host's native byte order. Since inet_csum_little() still performs
+    # the final byte swap, its result is byte-swapped compared to the result
+    # obtained on a little-endian host.
+
+    # Therefore, on a big-endian host we expect the byte-swapped result.
+    # On a little-endian host, we expect the normal result.
+
+    # ver=4, ihl=5, tos=0x0, len=60, id=10080, flags=None,
+    # frag=0, ttl=64, proto=icmp, checksum=0x0000,
+    # src=192.168.2.200, dst=192.168.2.199
+
+    ip_h = memoryview(
+        b"E\x00\x00<'`\x00\x00@\x01\x00\x00\xc0\xa8\x02\xc8\xc0\xa8\x02\xc7"
+    )
+
+    if sys.byteorder == "little":
+        assert inet_csum_little(data=ip_h) == 0xCC_81
+    else:
+        assert inet_csum_little(data=ip_h) == 0x81_CC
+
+def test_inet_csum_big():
+    # This test is intended to verify the checksum calculation as it would
+    # behave on a big-endian host.
+
+    # When run on a little-endian host, memoryview.cast() still reads the
+    # data using the host's native byte order. Since inet_csum_big() does
+    # not perform the final byte swap used by inet_csum_little(), its result
+    # is byte-swapped compared to inet_csum_little().
+
+    # Therefore, on a little-endian host we expect the byte-swapped result.
+    # On a big-endian host, we expect the normal result.
+
+    # ver=4, ihl=5, tos=0x0, len=60, id=10080, flags=None,
+    # frag=0, ttl=64, proto=icmp, checksum=0x0000,
+    # src=192.168.2.200, dst=192.168.2.199
+
+    ip_h = memoryview(
+        b"E\x00\x00<'`\x00\x00@\x01\x00\x00\xc0\xa8\x02\xc8\xc0\xa8\x02\xc7"
+    )
+    if sys.byteorder == "little":
+        assert inet_csum_big(data=ip_h) == 0x81_CC
+    if sys.byteorder == "big":
+        assert inet_csum_big(data=ip_h) == 0xCC_81
+
+
 
