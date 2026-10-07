@@ -5,7 +5,7 @@
 - [x] inet
 - [x] ethernet
 - [ ] buffer
-- [ ] csum
+- [x] csum
 - [ ] packet
 - [ ] socket
 - [ ] stack
